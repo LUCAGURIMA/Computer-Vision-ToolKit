@@ -1,0 +1,49 @@
+sistema_inspecao_hibrido/
+│
+├── core/                           # ✅ Núcleo do sistema
+│   ├── __init__.py                 # ✅ Tornar pacote Python
+│   ├── system_core.py              # ✅ Arquivo principal do core
+│   │
+│   ├── camera/                     # ✅ Sistema de câmeras
+│   │   ├── __init__.py             # ✅
+│   │   ├── icamera.py              # ✅ Interface
+│   │   ├── basler_camera.py        # ✅ Implementação Basler
+│   │   ├── webcam_camera.py        # ✅ Implementação Webcam
+│   │   ├── mock_camera.py          # ✅ Implementação Mock
+│   │   └── camera_manager.py       # ✅ Gerenciador com fallback
+│   │
+│   ├── ml/                         # ✅ Sistema ML
+│   │   ├── __init__.py             # ✅
+│   │   └── model_manager.py        # ✅ Gerenciador de modelos
+│   │
+│   ├── services/                   # ⚠️ Vazio (pode ficar assim)
+│   └── utils/                      # ✅ Utilitários
+│       ├── __init__.py             # ✅
+│       └── logger.py               # ✅ Sistema de logging
+│
+├── interfaces/                     # ✅ Interfaces
+│   ├── web/                        # ✅ Interface web
+│   │   ├── static/                 # ⚠️ Vazio (será criado automaticamente)
+│   │   ├── templates/              # ⚠️ Vazio (opcional)
+│   │   └── server.py               # ✅ Servidor FastAPI
+│   │
+│   └── desktop/                    # ✅ Interface desktop
+│       └── app.py                  # ✅ Aplicação PyQt5
+│
+├── config/                         # ✅ Configuração
+│   ├── __init__.py                 # ✅
+│   └── settings.py                 # ✅ Configurações principais
+│
+├── models/                         # ⚠️ Vazio (você colocará os modelos .pt aqui)
+├── assets/                         # ⚠️ Vazio (imagens de fallback)
+├── logs/                           # ⚠️ Vazio (criado automaticamente)
+├── data/                           # ⚠️ Vazio (criado automaticamente)
+├── tests/                          # ⚠️ Vazio (para testes futuros)
+│
+├── launcher.py                     # ✅ Ponto de entrada principal
+├── install_deps.py                 # ✅ Instalador inteligente
+├── requirements.txt                # ✅ Dependências
+├── pyproject.toml                  # ✅ Configuração moderna (opcional)
+├── setup.py                        # ✅ Setup tradicional (opcional)
+├── README.md                       # ✅ Documentação
+└── .gitignore                      # ✅ Arquivos ignorados pelo Git

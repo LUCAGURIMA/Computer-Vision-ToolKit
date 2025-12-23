@@ -1,0 +1,84 @@
+# ============================================
+# SISTEMA DE INSPEÇÃO HÍBRIDO - .gitignore
+# ============================================
+
+# 1. AMBIENTE VIRTUAL (NUNCA VERSIONAR!)
+venv/
+.venv/
+env/
+ENV/
+
+# 2. ARQUIVOS PYTHON
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+
+# 3. ARQUIVOS DO PROJETO (não versionar)
+# Logs
+*.log
+logs/
+system.log
+
+# Dados de inspeção
+data/results/
+data/*.db
+
+# Modelos ML (são grandes - versionar só referência)
+models/*.pt
+!models/example_model.txt  # Mantém exemplo pequeno
+
+# Assets/imagens
+assets/*.jpg
+assets/*.png
+!assets/placeholder.jpg  # Mantém placeholder pequeno
+
+# Configurações locais
+.env
+.env.local
+config.local.json
+*.local.*
+
+# 4. SISTEMA/IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.sublime-*
+
+# 5. PYINSTALLER/BUILD
+*.spec
+build/
+dist/
+__pycache__/
+
+# 6. TEMPORÁRIOS
+temp/
+tmp/
+*.tmp
+*.temp
+
+# 7. BACKUPS
+*.bak
+*.backup
+*~
+*_old
+
+# ============================================
+# O QUE DEVE SER VERSIONADO:
+# ============================================
+# !README.md
+# !requirements.txt
+# !launcher.py
+# !install_deps.py
+# !config/settings.py
+# !config/__init__.py
+# !core/ (exceto __pycache__)
+# !interfaces/ (exceto __pycache__)
+# models/README.md (documentação dos modelos)
+# assets/README.md (documentação dos assets)
