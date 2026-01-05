@@ -1,0 +1,129 @@
+Projeto: Usseewa - Visão Computacional (Resumo didático)
+====================================
+
+Objetivo deste documento
+- Escrever uma explicação didática do projeto para um estudante.
+- Mapear cada módulo, classes e padrões de programação usados.
+- Indicar onde procurar, como estender e que conceitos estudar.
+
+Sumário rápido
+- `launcher.py`: ponto de entrada e orquestra modos (desktop, web, ambos, cli).
+- `config/settings.py` (+ `config/__init__.py`): configuração central e utilitários.
+- `core/system_core.py`: Facade do sistema — coordena câmera, modelos e processamento.
+- `core/utils/logger.py`: logger central (loguru) e conveniência de logs.
+- `core/ml/model_manager.py`: gerencia modelos (Singleton) e predições.
+- `core/camera/`: implementações e gerenciador de câmeras com fallback.
+- `interfaces/desktop/app.py`: UI PyQt5 (threads, signals, atualização de UI).
+- `interfaces/web/server.py`: API FastAPI + WebSocket (adapter entre web e core).
+
+Arquivo por arquivo (o que faz, por que importa, o que estudar)
+
+1) `launcher.py`
+- Função: decide modo de execução (detecção automática, argumentos CLI).
+- Conceitos: parsing de argumentos (`argparse`), threads, abertura de navegador,
+  inicialização ordenada (logging, verificação de dependências, criação de diretórios).
+- Boas práticas aqui: tratar erros de inicialização, separar responsabilidades,
+  e não misturar lógica de inicialização com lógica de negócio.
+- Para estudar: `argparse`, `threading`, `signal` (tratamento de Ctrl+C), `logging`.
+
+2) `config/settings.py` (+ `config/__init__.py`)
+- Função: centralizar configurações (caminhos, parâmetros de câmera, modelos, web, desktop).
+- Técnicas: usar `Path` para caminhos, criar diretórios automaticamente, salvar/carregar JSON.
+- Padrão: 1 fonte de verdade para configurações — facilita alterar comportamento sem tocar código.
+- `get_model_path()` implementa fallback ao procurar arquivos `.pt`.
+- Para estudar: `pathlib`, serialização JSON, separação config/logic.
+
+3) `core/system_core.py`
+- Função: núcleo do sistema — ponto único que as interfaces usam.
+- Padrões: Facade — simplifica a API para subsistemas complexos (câmera, ML, I/O).
+- Responsabilidades:
+  - inicializar subsistemas (`_initialize_camera`, `_load_models`)
+  - captura de imagem (`capture_image`) com notificações por callbacks
+  - executar inspeções (`perform_segmentation`, `perform_classification`)
+  - salvar inspeções (`save_inspection`) e manter histórico limitado
+  - registro de callbacks e notificação (`register_callback`, `_notify`)
+- Conceitos importantes: separação entre lógica de domínio e interface; tratamento robusto de exceções;
+  trabalhar com `numpy`/`cv2` para manipulação de imagens.
+- Para estudar: padrões de projeto (Facade), callbacks, estrutura de dados para resultados, persistência simples (JSON + arquivos).
+
+4) `core/utils/logger.py`
+- Função: encapsular e configurar o logging do sistema usando `loguru`.
+- Vantagens: formato homogêneo, handlers para console e arquivos, rotação e retenção.
+- Para estudar: por que centralizar logging; `loguru` (ou `logging` do stdlib); práticas de formatação.
+
+5) `core/ml/model_manager.py`
+- Função: carregar e executar modelos (Ultralytics YOLO) com caching.
+- Padrão: Singleton — cada tipo de modelo (segmentation/classification) tem apenas uma instância.
+- Métodos-chave:
+  - `load_model(force_reload=False)`: carrega do disco (usa `get_model_path` como fallback)
+  - `predict(image, **kwargs)`: executa predição com parâmetros (conf, iou, imgsz)
+  - `get_info()` / `unload()` / `unload_all()`
+- Para estudar: Singleton em Python, gerenciamento de recursos (GPU/CUDA), configuração de hiperparâmetros.
+
+6) `core/camera/`
+- `icamera.py`: interface abstrata (`ABC`) que define o contrato de qualquer câmera.
+  - Por que usar: permite múltiplas implementações intercambiáveis (Basler, Webcam, Mock).
+- `basler_camera.py`: implementação real para câmeras Basler (usa `pypylon`).
+  - Conceitos: lidar com driver de hardware, timeouts, conversão de formatos de imagem.
+  - Atenção: código depende de biblioteca externa; sempre trate ausência (ex. flag `BASLER_AVAILABLE`).
+- `webcam_camera.py`: implementação usando `cv2.VideoCapture`.
+  - Conceitos: captura via OpenCV, configuração de resolução, testes rápidos de disponibilidade.
+- `mock_camera.py`: câmera fake que lê/gera imagens para desenvolvimento.
+  - Uso: testes locais e desenvolvimento sem hardware.
+- `camera_manager.py`: gerencia cadeia de câmeras (fallback automático).
+  - Comportamento: tenta câmera principal várias vezes, se falha avança para fallback.
+  - Padrões: Chain of Responsibility (sequência de tentativas), tratamento de falhas e recursão para tentar próxima.
+- Para estudar: `abc`, design de interfaces, abstração de hardware, tratamento de recursos (open/release).
+
+7) `interfaces/desktop/app.py`
+- Função: interface gráfica com `PyQt5`.
+- Estrutura:
+  - Threads (`QThread`) para operações bloqueantes (captura, inspeções)
+  - Signals (`pyqtSignal`) para comunicação back-to-main-thread
+  - Widgets organizados por abas (captura, inspeção, histórico, configurações)
+- Pontos didáticos:
+  - Nunca execute operações bloqueantes na thread da UI — use threads.
+  - Atualize widgets somente a partir da thread principal (usar sinais).
+  - Separar lógica de UI (apresentação) da lógica de negócio (`SystemCore`).
+- Para estudar: fundamentos do PyQt (event loop), QThread vs threading.Thread, sinais e slots.
+
+8) `interfaces/web/server.py`
+- Função: servidor HTTP com FastAPI que expõe endpoints REST e WebSocket.
+- Padrões: Adapter — adapta o `SystemCore` para uma API web.
+- Características:
+  - Endpoints `/api/capture`, `/api/classify`, `/api/segment`, `/api/status`
+  - WebSocket `/ws` para notificações em tempo real (clientes conectados recebem eventos)
+  - Serve arquivos estáticos para frontend básico
+- Concorrência/assincronia: FastAPI/uvicorn usa async; callbacks do `core` disparam tarefas asyncio para notificar websockets.
+- Para estudar: FastAPI, WebSocket, async/await, CORS, como serializar objetos complexos (imagens) em respostas legíveis.
+
+9) Outros arquivos
+- `README.md`, `requirements.txt` — comece por aqui para rodar o projeto.
+- `models/` — contém os pesos `.pt`. `config.get_model_path()` procura por arquivos `.pt` como fallback.
+- `assets/`, `data/`, `logs/` — pastas de suporte (mídia, resultados, logs).
+
+Conceitos e padrões de programação usados no projeto (resumido)
+- Abstração via interfaces: `ICamera` permite trocar implementações sem mudar o resto do sistema.
+- Facade: `SystemCore` unifica operações complexas em uma API simples para as interfaces.
+- Singleton: `ModelManager` evita recarregar modelos várias vezes.
+- Adapter: `WebServer` adapta chamadas HTTP/WS para métodos do `SystemCore`.
+- Chain of Responsibility / Fallback: `CameraManager` tenta câmeras em sequência até encontrar uma que funcione.
+- Callbacks / Observers: `register_callback` em `SystemCore` para notificar UI/clients quando eventos ocorrem.
+- Threads e Async: UI usa `QThread`, servidor web e notificações usam async/await.
+- Configuração centralizada: `config/settings.py` para parâmetros ajustáveis.
+
+Conselhos para estudar e evoluir o projeto (para você, estudante)
+- Leia os módulos na ordem: `config` -> `core/utils/logger` -> `core/camera/*` -> `core/ml/*` -> `core/system_core` -> `interfaces/*` -> `launcher.py`.
+- Experimente executar com `--mode cli` para testar sem GUI.
+- Use `MockCamera` para entender fluxo sem hardware.
+- Para entender ML, abra `core/ml/model_manager.py` e tente substituir `YOLO` por um stub de teste.
+- Escreva testes unitários para `CameraManager` e `ModelManager` (mocks/fakes ajudam muito).
+
+Onde está este arquivo?
+- Caminho: docs/code_overview.txt
+
+Próximo passo que posso fazer por você
+- Mostrar o conteúdo (abrir aqui) ou abrir o arquivo no editor.
+- Gerar uma versão em Markdown (`docs/code_overview.md`) ou um sumário em `README.md`.
+
+Boa leitura! Se quiser, mostro trechos do arquivo que mais te interessarem.

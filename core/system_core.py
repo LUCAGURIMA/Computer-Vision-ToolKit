@@ -24,33 +24,66 @@ class SystemCore:
     Núcleo central do sistema de inspeção.
     
     Funcionalidades:
-    1. Gerencia câmeras com fallback
-    2. Carrega e executa modelos ML
-    3. Processa resultados
-    4. Salva inspeções
-    5. Notifica interfaces sobre eventos
+    1. Gerencia câmeras com fallback automático
+    2. Carrega e executa modelos de ML (YOLOv8)
+    3. Processa resultados de segmentação e classificação
+    4. Salva inspeções em disco com histórico
+    5. Notifica interfaces web/desktop sobre eventos via callbacks
     
     Design Pattern: Facade Pattern
     - Fornece interface simples para funcionalidades complexas
     - Interface web e desktop conversam APENAS com esta classe
-    - Isola complexidade dos subsistemas
+    - Isola complexidade dos subsistemas (câmera, modelos, etc)
+    
+    Exemplo de uso:
+        core = SystemCore()
+        core.initialize()
+        image_data = core.capture_image()
+        seg_results = core.perform_segmentation(image_data["image"])
+        core.cleanup()
     """
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
-        Inicializa o núcleo do sistema.
+        Inicializa o núcleo do sistema com configurações padrão ou customizadas.
+        
+        Cria o diretório de resultados, inicializa variáveis de controle e
+        prepara o sistema para o método initialize() ser chamado.
         
         Args:
-            config (Dict): Configuração do sistema
+            config (Dict, opcional): 
+                - Configuração customizada do sistema
+                - Se None, usa SYSTEM_CONFIG do arquivo settings.py
+                - Exemplos de chaves: "save_results", "results_dir", "max_history"
+                
+        Exemplo:
+            # Usando config padrão
+            core = SystemCore()
+            
+            # Usando config customizada
+            custom_config = {
+                "save_results": True,
+                "results_dir": "/custom/path",
+                "max_history": 50
+            }
+            core = SystemCore(config=custom_config)
         """
+        # Usa config fornecida ou carrega a padrão do settings.py
         self.config = config or SYSTEM_CONFIG
-        self.camera_manager = None
-        self.segmentation_model = None
-        self.classification_model = None
-        self._callbacks = {}  # Para comunicação com interfaces
+        
+        # Inicializa componentes como None (serão instanciados em initialize())
+        self.camera_manager = None  # Será CameraManager instance
+        self.segmentation_model = None  # Será ModelManager instance para segmentação
+        self.classification_model = None  # Será ModelManager instance para classificação
+        
+        # Sistema de callbacks: interfaces podem se registrar para receber eventos
+        # Estrutura: {"event_name": [callback1, callback2, ...]}
+        self._callbacks = {}
+        
+        # Histórico de inspeções para rastreamento
         self._inspection_history = []
         
-        # Cria diretório de resultados
+        # Cria e configura diretório onde resultados serão salvos
         self.results_dir = Path(self.config.get("results_dir", DATA_DIR / "results"))
         self.results_dir.mkdir(exist_ok=True)
         
@@ -59,18 +92,34 @@ class SystemCore:
     
     def initialize(self) -> bool:
         """
-        Inicializa todos os subsistemas.
+        Inicializa TODOS os subsistemas do aplicativo.
+        
+        Deve ser chamado ANTES de usar qualquer funcionalidade de captura ou
+        processamento. Inicializa câmera e carrega modelos de ML em memória.
         
         Returns:
-            bool: True se tudo inicializou com sucesso
+            bool: 
+                - True se tudo inicializou com sucesso
+                - False se houve erro em algum subsistema
+        
+        Raises:
+            Não lança exceção, retorna False em caso de erro (seguro para interfaces)
+        
+        Exemplo:
+            core = SystemCore()
+            if core.initialize():
+                print("Pronto para usar!")
+                image = core.capture_image()
+            else:
+                print("Erro na inicialização")
         """
         try:
             log.info("🔄 Inicializando subsistemas...")
             
-            # 1. Inicializa câmera
+            # 1. Inicializa câmera (com fallback automático)
             self._initialize_camera()
             
-            # 2. Carrega modelos
+            # 2. Carrega modelos de ML (pode levar alguns segundos)
             self._load_models()
             
             log.info("✅ SystemCore inicializado com sucesso")
@@ -81,10 +130,26 @@ class SystemCore:
             return False
     
     def _initialize_camera(self):
-        """Inicializa o sistema de câmera"""
+        """
+        Inicializa o sistema de câmera com fallback automático.
+        
+        Tenta conectar à câmera primária (Basler). Se falhar, tenta fallbacks
+        (webcam, câmera simulada) até conseguir uma conexão bem-sucedida.
+        
+        Levanta uma exceção se NENHUMA câmera conseguir inicializar.
+        
+        Raises:
+            RuntimeError: Se não conseguir inicializar nenhuma câmera
+        
+        Exemplo:
+            self._initialize_camera()
+            # Tenta: Basler -> Webcam -> Mock
+        """
         log.info("📷 Inicializando câmera...")
+        # Cria gerenciador de câmera que liida com múltiplas cameras
         self.camera_manager = CameraManager()
         
+        # Initialize tenta conectar em ordem de fallback
         if not self.camera_manager.initialize():
             raise RuntimeError("Falha ao inicializar câmera")
         
@@ -92,25 +157,60 @@ class SystemCore:
         # (implementação avançada - pode ser expandida)
     
     def _load_models(self):
-        """Carrega modelos ML"""
+        """
+        Carrega os modelos de Machine Learning do disco para memória.
+        
+        Carrega dois modelos separados:
+        1. Segmentação (YOLOv8-seg): detecta e segmenta defeitos na imagem
+        2. Classificação (YOLOv8-cls): classifica produto como BOM ou RUIM
+        
+        Se um modelo falhar ao carregar, log um aviso mas continua
+        (assim o sistema não trava se um modelo estiver faltando).
+        
+        Exemplo:
+            self._load_models()
+            # Carrega models/segmentation_best.pt
+            # Carrega models/classification_best.pt
+        """
         log.info("🤖 Carregando modelos ML...")
         
-        # Modelo de segmentação
+        # Carrega modelo de segmentação (detecta defeitos)
         self.segmentation_model = ModelManager.get_instance("segmentation")
         if not self.segmentation_model.load_model():
+            # Aviso em vez de erro - sistema continua sem este modelo
             log.warning("⚠️  Não foi possível carregar modelo de segmentação")
         
-        # Modelo de classificação
+        # Carrega modelo de classificação (classifica qualidade)
         self.classification_model = ModelManager.get_instance("classification")
         if not self.classification_model.load_model():
             log.warning("⚠️  Não foi possível carregar modelo de classificação")
     
     def capture_image(self) -> Optional[Dict[str, Any]]:
         """
-        Captura uma imagem usando o sistema de câmeras.
+        Captura uma imagem ao vivo usando o sistema de câmeras.
+        
+        Notifica interfaces (web/desktop) sobre cada etapa:
+        - capture_started: quando inicia a captura
+        - capture_completed: sucesso com metadados
+        - capture_failed: erro na captura
         
         Returns:
-            Dict com imagem e metadados, ou None se falhar
+            Dict com estrutura:
+                {
+                    "image": numpy.ndarray (H, W, 3),  # Imagem em BGR
+                    "timestamp": "2026-01-05T14:30:45",  # ISO format
+                    "camera_info": {"type": "basler", ...},  # Info da câmera ativa
+                    "success": True  # Sempre True se retornar dict
+                }
+            ou None se falhar
+        
+        Exemplo:
+            result = core.capture_image()
+            if result:
+                image = result["image"]  # numpy array
+                timestamp = result["timestamp"]
+                print(f"Capturada em {timestamp}")
+                print(f"Resolução: {image.shape}")  # (height, width, 3)
         """
         try:
             log.info("📸 Capturando imagem...")
@@ -118,15 +218,16 @@ class SystemCore:
             # Notifica interfaces que captura começou
             self._notify("capture_started", {})
             
-            # Captura imagem
+            # Captura imagem da câmera ativa
             image = self.camera_manager.capture()
             
+            # Valida se captura foi bem-sucedida
             if image is None:
                 log.error("❌ Falha ao capturar imagem")
                 self._notify("capture_failed", {"error": "Falha na captura"})
                 return None
             
-            # Prepara resultado
+            # Prepara resultado com metadados completos
             result = {
                 "image": image,
                 "timestamp": datetime.now().isoformat(),
@@ -146,41 +247,84 @@ class SystemCore:
     
     def perform_segmentation(self, image: np.ndarray) -> Dict[str, Any]:
         """
-        Executa inspeção de segmentação.
+        Executa inspeção de SEGMENTAÇÃO (detecção de defeitos).
+        
+        Executa o modelo YOLOv8 de segmentação que localiza e marca
+        defeitos na imagem. Útil para análise visual detalhada.
         
         Args:
-            image: Imagem numpy array
-            
+            image (np.ndarray):
+                - Imagem em formato numpy array (H, W, 3) BGR do OpenCV
+                - Dimensões: altura, largura, canais (Blue, Green, Red)
+                - Tipo: uint8 (valores 0-255)
+                - Por que: YOLOv8 espera este formato específico
+                
+        Exemplo:
+            image = core.capture_image()["image"]  # (1080, 1920, 3)
+            results = core.perform_segmentation(image)
+            print(f"Defeitos encontrados: {results['total_defects']}")
+            print(f"Há defeitos críticos: {results['has_defects']}")
+            for defect in results['defects']:
+                print(f"  Classe: {defect['class_name']}")
+                print(f"  Confiança: {defect['confidence']:.2%}")
+                print(f"  BBox: {defect['bbox']}")  # [x1, y1, x2, y2]
+        
         Returns:
-            Dict com resultados da segmentação
+            Dict com estrutura:
+                {
+                    "defects": [
+                        {
+                            "bbox": [x1, y1, x2, y2],  # coordenadas pixel
+                            "confidence": 0.95,  # 0.0-1.0
+                            "class": 0,  # índice da classe
+                            "class_name": "Trinca"  # nome legível
+                        },
+                        ...
+                    ],
+                    "has_defects": True,  # Se algum tem conf > threshold
+                    "total_defects": 3,  # Quantidade total encontrada
+                    "confidence_threshold": 0.5,  # Threshold usado
+                    "success": True
+                }
+            ou com erro:
+                {
+                    "defects": [],
+                    "has_defects": False,
+                    "error": "mensagem de erro",
+                    "success": False
+                }
         """
         try:
             log.info("🔍 Executando segmentação...")
+            # Notifica interface que começou
             self._notify("segmentation_started", {})
             
+            # Valida se modelo está carregado
             if self.segmentation_model is None or self.segmentation_model.model is None:
                 raise RuntimeError("Modelo de segmentação não carregado")
             
-            # Executa predição
+            # Executa predição (YOLOv8 retorna detecções)
             results = self.segmentation_model.predict(image)
             
-            # Processa resultados
+            # Processa resultados brutos do modelo
             defects = []
             for result in results:
                 if result.boxes is not None:
+                    # Extrai cada detecção
                     for box, conf, cls in zip(result.boxes.xyxy, result.boxes.conf, result.boxes.cls):
                         defect = {
-                            "bbox": box.tolist(),
-                            "confidence": float(conf),
-                            "class": int(cls),
+                            "bbox": box.tolist(),  # [x1, y1, x2, y2]
+                            "confidence": float(conf),  # 0.95
+                            "class": int(cls),  # 0, 1, 2...
                             "class_name": self.segmentation_model.model.names[int(cls)] if hasattr(self.segmentation_model.model, "names") else str(cls)
                         }
                         defects.append(defect)
             
-            # Determina se há defeitos (considera confiança > threshold)
+            # Determina se há defeitos críticos (confiança > threshold)
             confidence_threshold = self.segmentation_model.config.get("confidence_threshold", 0.5)
             has_defects = any(d["confidence"] > confidence_threshold for d in defects)
             
+            # Monta resultado final
             result = {
                 "defects": defects,
                 "has_defects": has_defects,
@@ -206,42 +350,99 @@ class SystemCore:
     
     def perform_classification(self, image: np.ndarray) -> Dict[str, Any]:
         """
-        Executa inspeção de classificação.
+        Executa inspeção de CLASSIFICAÇÃO (BOM ou RUIM).
+        
+        Executa o modelo YOLOv8 de classificação que determina se o
+        produto é BOM ou RUIM. Retorna status "indeterminado" se confiança
+        for abaixo do threshold (rejeitado).
         
         Args:
-            image: Imagem numpy array
+            image (np.ndarray):
+                - Imagem em formato numpy array (H, W, 3) BGR do OpenCV
+                - Dimensões: altura, largura, canais (Blue, Green, Red)
+                - Tipo: uint8 (valores 0-255)
+                - Por que: YOLOv8 espera este formato específico
+        
+        Exemplo:
+            image = core.capture_image()["image"]
+            result = core.perform_classification(image)
             
+            if result['status'] == 'accepted':
+                if result['defects_detected']:
+                    print("Produto RUIM - rejeitado")
+                else:
+                    print("Produto BOM - aprovado")
+            else:
+                print(f"Indeterminado - confiança abaixo do threshold")
+                print(f"Confiança: {result['confidence']:.2%}")
+        
         Returns:
-            Dict com resultados da classificação
+            Dict com estrutura:
+                # Quando confiança < threshold (INDETERMINADO)
+                {
+                    "defects_info": [{"class": "INDETERMINADO", "status": "rejected"}],
+                    "defects_detected": None,  # None = indeterminado
+                    "confidence": 0.45,  # Abaixo do threshold (0.7)
+                    "confidence_threshold": 0.7,
+                    "status": "indeterminado",
+                    "success": True
+                }
+                
+                # Quando confiança > threshold (ACEITO)
+                {
+                    "defects_info": [
+                        {
+                            "class": "BOM",  # ou "RUIM"
+                            "confidence": 0.95,
+                            "class_idx": 0  # índice da classe
+                        }
+                    ],
+                    "defects_detected": False,  # True se RUIM, False se BOM
+                    "confidence": 0.95,
+                    "confidence_threshold": 0.7,
+                    "status": "accepted",
+                    "success": True
+                }
+                
+                # Em caso de erro
+                {
+                    "defects_info": [],
+                    "defects_detected": None,
+                    "error": "mensagem de erro",
+                    "success": False
+                }
         """
         try:
             log.info("🏷️  Executando classificação...")
+            # Notifica interface que começou
             self._notify("classification_started", {})
             
+            # Valida se modelo está carregado
             if self.classification_model is None or self.classification_model.model is None:
                 raise RuntimeError("Modelo de classificação não carregado")
             
-            # Executa predição
+            # Executa predição (YOLOv8 classificação retorna probabilidades)
             results = self.classification_model.predict(image)
             
-            # Processa resultados (classificação retorna diferente de detecção)
+            # Processa resultados de classificação (diferente de detecção)
             defects_info = []
             
             for result in results:
-                # Verifica se tem atributo probs (classificação)
+                # Classificação retorna atributo 'probs' em vez de 'boxes'
                 if hasattr(result, 'probs'):
                     probs = result.probs
-                    top1_idx = probs.top1
-                    top1_conf = probs.top1conf.item()
+                    top1_idx = probs.top1  # Índice da classe com maior probabilidade
+                    top1_conf = probs.top1conf.item()  # Confiança da classe vencedora
                     
+                    # Obtém nome legível da classe
                     class_name = "Desconhecido"
                     if hasattr(self.classification_model.model, 'names'):
                         class_name = self.classification_model.model.names[top1_idx]
                     
                     defect = {
-                        "class": class_name,
-                        "confidence": top1_conf,
-                        "class_idx": int(top1_idx)
+                        "class": class_name,  # "BOM" ou "RUIM"
+                        "confidence": top1_conf,  # 0.95
+                        "class_idx": int(top1_idx)  # 0 ou 1
                     }
                     defects_info.append(defect)
             
@@ -250,7 +451,7 @@ class SystemCore:
             first_defect = defects_info[0] if defects_info else {}
             
             if first_defect.get("confidence", 0) < confidence_threshold:
-                # INDETERMINADO
+                # INDETERMINADO: confiança abaixo do threshold
                 result = {
                     "defects_info": [{"class": "INDETERMINADO", "status": "rejected"}],
                     "defects_detected": None,  # None indica indeterminado
@@ -261,18 +462,20 @@ class SystemCore:
                 }
                 log.warning(f"⚠️  Classificação indeterminada: confiança {first_defect.get('confidence'):.3f} < {confidence_threshold}")
             else:
-                # Classificação válida
+                # ACEITO: confiança suficiente
+                # Determina se produto é RUIM (defeituoso)
                 defects_detected = first_defect.get("class", "").upper() == "RUIM"
                 
                 result = {
                     "defects_info": defects_info,
-                    "defects_detected": defects_detected,
+                    "defects_detected": defects_detected,  # True = RUIM, False = BOM
                     "confidence": first_defect.get("confidence", 0),
                     "confidence_threshold": confidence_threshold,
                     "status": "accepted",
                     "success": True
                 }
                 
+                # Log com status legível
                 status = "RUIM" if defects_detected else "BOM"
                 log.info(f"✅ Classificação: {status} (confiança: {first_defect.get('confidence'):.3f})")
             
@@ -291,55 +494,84 @@ class SystemCore:
     
     def save_inspection(self, inspection_data: Dict[str, Any]) -> str:
         """
-        Salva resultados da inspeção.
+        Salva resultados da inspeção em disco de forma organizada.
+        
+        Cria um diretório com timestamp, salva dados em JSON e imagem em JPEG.
+        Mantém histórico dos últimos N resultados (controlado por max_history).
         
         Args:
-            inspection_data: Dados da inspeção
-            
+            inspection_data (Dict):
+                - Dados da inspeção a salvar
+                - Pode conter "image" (numpy array - será removido e salvo separado)
+                - Pode conter qualquer outro dado: "defects", "classification", etc
+                - Por que: precisa conter contexto completo da inspeção
+                
+        Exemplo:
+            inspection_data = {
+                "image": numpy_array_image,  # Será removido e salvo como JPEG
+                "inspection_type": "segmentation",
+                "defects": [...],
+                "timestamp": "2026-01-05T14:30:45",
+                "camera": "basler"
+            }
+            saved_path = core.save_inspection(inspection_data)
+            # Cria: data/results/20260105_143045/
+            #       ├── inspection_data.json  (metadados)
+            #       └── image.jpg (imagem capturada)
+        
         Returns:
-            str: Caminho do arquivo salvo
+            str: Caminho do diretório criado (vazio "" se desabilitado ou erro)
+        
+        Lógica de salvamento:
+            1. Verifica se save_results está ativado na config
+            2. Cria diretório com timestamp: YYYYMMDD_HHMMSS
+            3. Remove imagem dos dados (muito grande)
+            4. Salva imagem como JPEG em separado
+            5. Salva dados em JSON
+            6. Atualiza histórico de inspeções
         """
+        # Se salvamento está desabilitado na config, retorna vazio
         if not self.config.get("save_results", True):
             return ""
         
         try:
-            # Cria diretório com timestamp
+            # Cria diretório com timestamp (organiza por data/hora)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             inspection_dir = self.results_dir / timestamp
             inspection_dir.mkdir(exist_ok=True)
             
-            # Salva dados em JSON
+            # Salva dados (sem imagem) em JSON para fácil leitura
             data_file = inspection_dir / "inspection_data.json"
             with open(data_file, 'w', encoding='utf-8') as f:
                 json.dump(inspection_data, f, indent=2, ensure_ascii=False)
             
-            # Salva imagem se existir
+            # Salva imagem em separado (JPEG comprimido é muito menor)
             if "image" in inspection_data:
-                # Remove imagem do JSON (é grande e binária)
+                # Remove imagem do JSON (é dado binário, pode pesar 5MB+)
                 image = inspection_data.pop("image")
                 image_file = inspection_dir / "image.jpg"
+                # Salva em JPEG com qualidade 85 (bom balance tamanho/qualidade)
                 cv2.imwrite(str(image_file), image)
+                # Adiciona referência ao caminho da imagem no JSON
                 inspection_data["image_file"] = str(image_file.relative_to(self.results_dir))
                 
-                # Recoloca imagem nos dados (como None para indicar que foi salva separadamente)
-                inspection_data["image"] = None
-            
-            # Reescreve JSON sem a imagem
-            with open(data_file, 'w', encoding='utf-8') as f:
-                json.dump(inspection_data, f, indent=2, ensure_ascii=False)
+                # Reescreve JSON com referência à imagem
+                with open(data_file, 'w', encoding='utf-8') as f:
+                    json.dump(inspection_data, f, indent=2, ensure_ascii=False)
             
             log.info(f"💾 Inspeção salva em: {inspection_dir}")
             
-            # Adiciona ao histórico
+            # Adiciona ao histórico para rastreamento
             self._inspection_history.append({
                 "timestamp": timestamp,
                 "path": str(inspection_dir),
                 "type": inspection_data.get("inspection_type", "unknown")
             })
             
-            # Mantém histórico limitado
+            # Mantém histórico limitado (evita crescimento infinito)
             max_history = self.config.get("max_history", 100)
             if len(self._inspection_history) > max_history:
+                # Remove as mais antigas
                 self._inspection_history = self._inspection_history[-max_history:]
             
             return str(inspection_dir)
@@ -350,37 +582,140 @@ class SystemCore:
     
     def register_callback(self, event: str, callback: Callable):
         """
-        Registra uma função de callback para um evento.
+        Registra uma função callback para ser notificada sobre um evento.
         
-        Interfaces (web/desktop) usam isso para receber notificações.
+        Permite que interfaces (web/desktop) se registrem para receber
+        notificações em tempo real quando certos eventos ocorrem.
+        Sistema tipo pub/sub (publicador/subscritor).
         
         Args:
-            event (str): Nome do evento (ex: "capture_completed")
-            callback (Callable): Função que será chamada
+            event (str):
+                - Nome do evento para registrar
+                - Exemplos: "capture_started", "capture_completed", "segmentation_completed"
+                - Por que: permite desacoplamento entre core e interfaces
+                
+            callback (Callable):
+                - Função que será chamada quando evento ocorrer
+                - Assinatura: callback(data: Dict) -> None
+                - data contém informações específicas do evento
+                - Por que: permite que interfaces reajam a eventos do core
+        
+        Exemplo:
+            # Registra callback para quando captura terminar
+            def on_capture_done(data):
+                print(f"Capturado! {data['timestamp']}")
+                print(f"Resolução: {data['image'].shape}")
+            
+            core.register_callback("capture_completed", on_capture_done)
+            
+            # Agora quando core.capture_image() for chamado e terminar,
+            # on_capture_done será chamado automaticamente
+            
+            # Eventos disponíveis:
+            # - capture_started: (sem dados)
+            # - capture_completed: {"image", "timestamp", "camera_info", "success"}
+            # - capture_failed: {"error": "mensagem"}
+            # - segmentation_started: (sem dados)
+            # - segmentation_completed: {"defects", "has_defects", ...}
+            # - segmentation_failed: {"error"}
+            # - classification_started: (sem dados)
+            # - classification_completed: {"defects_info", "defects_detected", ...}
+            # - classification_failed: {"error"}
         """
+        # Cria lista de callbacks para evento se não existir
         if event not in self._callbacks:
             self._callbacks[event] = []
         
+        # Adiciona callback à lista
         self._callbacks[event].append(callback)
         log.debug(f"📝 Callback registrado para evento: {event}")
     
     def _notify(self, event: str, data: Any):
         """
-        Notifica todos os callbacks registrados para um evento.
+        Notifica todos os callbacks registrados para um evento específico.
+        
+        Método PRIVADO (começa com _) usado internamente pelo SystemCore
+        para disparar notificações aos subscribers.
         
         Args:
-            event (str): Nome do evento
-            data (Any): Dados a serem passados para callbacks
+            event (str):
+                - Nome do evento que ocorreu
+                - Por que: precisa saber qual evento disparou
+                
+            data (Any):
+                - Dados a serem passados aos callbacks
+                - Geralmente um Dict com informações do evento
+                - Por que: callbacks precisam dos detalhes do que aconteceu
+        
+        Exemplo (uso interno):
+            self._notify("capture_completed", {
+                "image": img,
+                "timestamp": "2026-01-05T14:30:45",
+                "camera_info": {...},
+                "success": True
+            })
+        
+        Segurança:
+            - Se um callback lançar exceção, o erro é logado mas não
+              interrompe callbacks restantes (falha gracioso)
         """
+        # Verifica se há callbacks registrados para este evento
         if event in self._callbacks:
+            # Chama cada callback registrado
             for callback in self._callbacks[event]:
                 try:
+                    # Chama callback com os dados
                     callback(data)
                 except Exception as e:
+                    # Não deixa callback com erro derrubar o sistema
                     log.error(f"❌ Erro em callback do evento {event}: {e}")
     
     def get_system_info(self) -> Dict[str, Any]:
-        """Retorna informações completas do sistema"""
+        """
+        Retorna informações completas do sistema para diagnóstico.
+        
+        Coleta dados de todas as partes do sistema (câmera, modelos, etc)
+        em um único dicionário, útil para status/debug/interface.
+        
+        Returns:
+            Dict com estrutura:
+                {
+                    "system": {
+                        "initialized": True,  # Se tudo inicializou
+                        "results_dir": "/path/to/data/results",
+                        "inspection_history_count": 5  # Quantas inspeções salvas
+                    },
+                    "camera": {
+                        "type": "basler",  # Tipo da câmera ativa
+                        "ip": "192.168.1.100",
+                        "status": "connected",
+                        ... (outras info da câmera)
+                    },
+                    "models": {
+                        "segmentation": {
+                            "loaded": True,
+                            "model_path": "/path/to/model.pt",
+                            ... (outras info do modelo)
+                        },
+                        "classification": {
+                            "loaded": True,
+                            "model_path": "/path/to/model.pt",
+                            ... (outras info do modelo)
+                        }
+                    },
+                    "config": {
+                        "save_results": True,
+                        "max_history": 100,
+                        ... (todas as configs)
+                    }
+                }
+        
+        Exemplo:
+            info = core.get_system_info()
+            print(f"Câmera ativa: {info['camera']['type']}")
+            print(f"Modelos carregados: {info['models']['segmentation']['loaded']}")
+            print(f"Total inspeções: {info['system']['inspection_history_count']}")
+        """
         info = {
             "system": {
                 "initialized": self.camera_manager is not None,
@@ -397,13 +732,38 @@ class SystemCore:
         return info
     
     def cleanup(self):
-        """Libera todos os recursos"""
+        """
+        Libera todos os recursos ocupados pelo sistema.
+        
+        DEVE SER CHAMADO AO ENCERRAR O APLICATIVO para evitar
+        memory leaks e deixar câmeras e GPU em estado limpo.
+        
+        Ações:
+        1. Libera câmera (fecha conexão)
+        2. Descarrega modelos da GPU (libera VRAM)
+        3. Log de conclusão
+        
+        Exemplo:
+            try:
+                core = SystemCore()
+                core.initialize()
+                # ... usar o core ...
+            finally:
+                core.cleanup()  # Sempre chamar, mesmo em erro
+            
+            # Melhor ainda, usar context manager (não implementado aqui)
+            # with SystemCore() as core:
+            #     core.initialize()
+            #     # ... usar ...
+            # # cleanup automático ao sair do with
+        """
         log.info("🧹 Limpando recursos do SystemCore...")
         
+        # Libera câmera
         if self.camera_manager:
             self.camera_manager.release()
         
-        # Descarrega modelos
+        # Descarrega modelos (libera GPU/VRAM)
         ModelManager.unload_all()
         
         log.info("✅ SystemCore limpo")

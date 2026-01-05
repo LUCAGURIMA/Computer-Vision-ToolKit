@@ -1,0 +1,127 @@
+Roadmap de Estudos — Teoria e Prática do Projeto Usseewa
+========================================================
+
+Objetivo
+- Fornecer um plano de aprendizagem passo a passo para entender
+  a teoria por trás da programação usada no projeto e como o sistema funciona.
+ - Metodologia: teoria + prática imediata (ler -> implementar pequeno exercício -> revisar).
+
+Como usar este roadmap
+- Estude em blocos curtos (50–90 min). Após cada bloco, escreva/execulte um pequeno código.
+- Priorize a execução dos exemplos: clone partes do projeto e modifique-as.
+- Faça revisão semanal e crie pequenos testes automatizados para o que implementar.
+
+Fase 0 — Preparação (1 semana)
+- Objetivo: configurar ambiente e rodar o projeto em modo `cli` com `MockCamera`.
+- Tarefas:
+  - Instalar dependências listadas em `requirements.txt`.
+  - Executar: `python launcher.py --mode cli` e testar comandos básicos.
+  - Ler `README.md`, `config/settings.py` e `launcher.py`.
+
+Fase 1 — Fundamentos de Python e boas práticas (2–3 semanas)
+- Tópicos:
+  - Sintaxe Python moderna: typing, dataclasses, pathlib, context managers
+  - Módulos e pacotes (`__init__.py`), imports relativos/absolutos
+  - Estruturas de dados imutáveis vs mutáveis, iteradores e geradores
+  - Tratamento de exceções e logging (uso do `loguru` no projeto)
+- Metodologia:
+  - Leitura: capítulos iniciais de um bom livro (ex: “Fluent Python” para conceitos avançados).
+  - Exercício: refatore uma função simples do `core/system_core.py` adicionando `typing` e testes.
+  - Prática: escrever 5 testes pytest cobrindo casos normais e de erro.
+
+Fase 2 — Padrões de Projeto e Arquitetura (2 semanas)
+- Tópicos:
+  - Facade (SystemCore), Singleton (ModelManager), Adapter (WebServer), Chain of Responsibility (CameraManager)
+  - Inversão de dependência, separação de camadas (core vs interfaces)
+- Metodologia:
+  - Mapear onde cada padrão aparece no projeto (escreva um pequeno diagrama).
+  - Exercício: implemente um novo `ICamera` simples (por ex., `FileCamera`) e integre ao `CameraManager`.
+
+Fase 3 — Processamento de Imagem (OpenCV) (2–3 semanas)
+- Tópicos:
+  - Representação de imagens em NumPy (BGR vs RGB), operações básicas (resize, crop, color conv)
+  - Leitura/escrita com `cv2`, desenho de boxes e anotações
+  - Pré-processamento para modelos (normalização, redimensionamento, augmentations simples)
+- Metodologia:
+  - Experimentos: modifique `MockCamera` para retornar imagens com diferentes formatos;
+  - Exercício: escrever função que desenha boxes retornadas pela segmentação e salva imagem.
+
+Fase 4 — Aprendizado de Máquina e Visão Computacional (3–5 semanas)
+- Tópicos:
+  - Fundamentos: redes neurais, backpropagation, otimização, overfitting/regularização
+  - Transfer learning e inferência (como os pesos `.pt` são usados)
+  - YOLO e Ultralitycs: como modelos de detecção/classificação retornam resultados
+  - Métricas: precisão, recall, IoU, thresholds
+- Metodologia:
+  - Curso: um curso prático de Deep Learning (ex: PyTorch official tutorials ou cursos como fast.ai)
+  - Exercício: criar um stub de `ModelManager` que retorna resultados falsos e integrar ao `SystemCore`.
+  - Prática: rodar inferência local com um modelo leve (ou usar o `MockCamera` + modelo pequeno).
+
+Fase 5 — Sistemas e Integração (2–3 semanas)
+- Tópicos:
+  - Multithreading vs Async: `QThread` para UI, `async/await` para servidor FastAPI
+  - Comunicação inter-processo e callbacks/observers
+  - Boas práticas para limpeza de recursos (open/release), tratamento de sinais (Ctrl+C)
+- Metodologia:
+  - Exercício: adicionar callback em `SystemCore` que grava eventos em arquivo e notifica via WebSocket.
+  - Experimento: modificar `interfaces/web/server.py` para tratar um novo endpoint simples.
+
+Fase 6 — Interfaces: Desktop (PyQt) e Web (FastAPI) (2–3 semanas)
+- Tópicos:
+  - PyQt: event loop, sinais/slots, atualizações seguras da UI
+  - FastAPI: rotas, WebSocket, CORS, serialização de respostas (imagens vs metadados)
+  - Testes de integração minimalistas (usar `TestClient` do FastAPI)
+- Metodologia:
+  - Exercício desktop: criar botão que solicita captura e mostra boxes desenhados.
+  - Exercício web: escrever teste que chama `/api/capture` e valida JSON retornado.
+
+Fase 7 — Deploy, Observability e Produção (2 semanas)
+- Tópicos:
+  - Como servir FastAPI (uvicorn/gunicorn), configurações de produção
+  - Logs, rotação e retenção (configurado em `core/utils/logger.py`)
+  - Gerenciamento de modelos (unload, liberar CUDA), deployment de modelos
+- Metodologia:
+  - Experimento: criar script simples para iniciar servidor (sem reload) e logar carga de memória.
+  - Exercício: simular falha de câmera e validar fallback automatizado.
+
+Fase 8 — Testes, Qualidade e Manutenção Contínua (contínuo)
+- Tópicos:
+  - Testes unitários e de integração (pytest), mocks e fixtures
+  - CI básico (GitHub Actions) para rodar testes e lint
+  - Documentação mínima (docstrings + `docs/`) e checklist de PR
+- Metodologia:
+  - Escrever suites de testes para `CameraManager` e `ModelManager` usando `MockCamera`.
+  - Criar workflow CI que roda `pytest` e `flake8` (opcional)
+
+Recursos recomendados (curtos e práticos)
+- Python: “Fluent Python” (avançado), “Automate the Boring Stuff” (prática)
+- Deep Learning: PyTorch tutorials, fast.ai course
+- Computer Vision: OpenCV docs, “Practical Computer Vision with Python” (tutoriais)
+- Web/API: FastAPI docs (rápido e prático)
+- GUI: tutoriais PyQt5 (oficial e exemplos práticos)
+
+Metodologia de estudo resumida (como organizar seu tempo)
+- Técnica: leer → hands-on → rever (50–90 min ciclos)
+- Entregáveis: a cada semana entregue um mini-artefato (ex: novo `ICamera`, endpoint, teste)
+- Revisão: use spaced repetition (resuma em 2–3 bullets o que aprendeu) e escreva 1 issue por melhoria
+
+Sugestão de cronograma por 12 semanas (compacto)
+- Semanas 1–2: Fase 0 + Fase 1
+- Semanas 3–4: Fase 2 + Fase 3
+- Semanas 5–7: Fase 4
+- Semanas 8–9: Fase 5 + Fase 6
+- Semana 10: Fase 7
+- Semanas 11–12: Fase 8 + ajustes, CI e documentação
+
+Exercícios práticos ligados ao seu repo
+- Implementar `FileCamera` que lê imagens de `assets/` e usá-la no `CameraManager`.
+- Adicionar endpoint `/api/health` que retorna status detalhado do core.
+- Escrever testes para `SystemCore.capture_image()` simulando falhas.
+
+Próximos passos que eu posso fazer
+- Gerar checklist de exercícios com comandos e arquivos-alvo no repo.
+- Criar templates de testes `pytest` para começar.
+
+Arquivo: `docs/learning_roadmap.txt`
+
+Boa jornada — quer que eu gere o checklist de exercícios agora?
