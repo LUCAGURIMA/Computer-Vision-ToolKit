@@ -18,6 +18,8 @@ from core.camera import CameraManager
 from core.ml.model_manager import ModelManager
 from core.utils.logger import log
 from config import SYSTEM_CONFIG, DATA_DIR
+from core.image_processing.image_pipeline import ImagePipeline
+from core.services.capture_scheduler import CaptureScheduler
 
 class SystemCore:
     """
@@ -86,6 +88,9 @@ class SystemCore:
         # Cria e configura diretório onde resultados serão salvos
         self.results_dir = Path(self.config.get("results_dir", DATA_DIR / "results"))
         self.results_dir.mkdir(exist_ok=True)
+        # Componentes auxiliares
+        self._image_pipeline = ImagePipeline(self.config.get("image_pipeline", {}))
+        self._capture_scheduler = None  # Será CaptureScheduler quando iniciado
         
         log.info("🚀 Inicializando SystemCore...")
         log.info(f"📁 Diretório de resultados: {self.results_dir}")
@@ -244,6 +249,65 @@ class SystemCore:
             log.error(f"❌ Erro na captura: {e}")
             self._notify("capture_failed", {"error": str(e)})
             return None
+
+    def preprocess_image(self, image: np.ndarray, ops: List[Dict[str, Any]]) -> np.ndarray:
+        """
+        Aplica pré-processamento configurável à imagem.
+
+        Args:
+            image (np.ndarray): imagem original em BGR
+            ops (List[Dict]): lista de operações (ver ImagePipeline.apply)
+
+        Returns:
+            np.ndarray: imagem processada
+
+        Exemplo:
+            ops = [{"name": "crop", "bbox": [100,50,400,300]}, {"name": "resize", "size": [256,256]}]
+            out = core.preprocess_image(image, ops)
+        """
+        return self._image_pipeline.apply(image, ops)
+
+    def start_periodic_capture(self, interval_seconds: float, save_dir: str, preprocess_ops: Optional[List[Dict[str, Any]]] = None):
+        """
+        Inicia captura periódica em background.
+
+        Args:
+            interval_seconds (float): intervalo entre capturas em segundos
+            save_dir (str): diretório onde salvar imagens
+
+        Observações:
+            - Garante que a câmera esteja inicializada
+            - Emite evento "periodic_capture_saved" quando um arquivo for salvo
+        """
+        # Garante câmera inicializada
+        if not self.camera_manager:
+            self._initialize_camera()
+
+        save_path = Path(save_dir)
+
+        # Cria função de pré-processamento a partir das ops, se fornecidas
+        preprocess_fn = None
+        if preprocess_ops:
+            preprocess_fn = lambda img: self._image_pipeline.apply(img, preprocess_ops)
+
+        # cria e inicia scheduler com preprocess_fn opcional
+        self._capture_scheduler = CaptureScheduler(
+            self.camera_manager,
+            save_path,
+            on_saved=lambda d: self._notify("periodic_capture_saved", d),
+            preprocess_fn=preprocess_fn,
+        )
+        self._capture_scheduler.start(interval_seconds)
+
+    def stop_periodic_capture(self):
+        """
+        Para a captura periódica se estiver em execução.
+        """
+        if self._capture_scheduler:
+            try:
+                self._capture_scheduler.stop()
+            finally:
+                self._capture_scheduler = None
     
     def perform_segmentation(self, image: np.ndarray) -> Dict[str, Any]:
         """
@@ -295,7 +359,7 @@ class SystemCore:
                 }
         """
         try:
-            log.info("🔍 Executando segmentação...")
+            log.info("Executando segmentação...")
             # Notifica interface que começou
             self._notify("segmentation_started", {})
             
@@ -413,7 +477,7 @@ class SystemCore:
                 }
         """
         try:
-            log.info("🏷️  Executando classificação...")
+            log.info("Executando classificação...")
             # Notifica interface que começou
             self._notify("classification_started", {})
             
@@ -540,26 +604,25 @@ class SystemCore:
             inspection_dir = self.results_dir / timestamp
             inspection_dir.mkdir(exist_ok=True)
             
-            # Salva dados (sem imagem) em JSON para fácil leitura
             data_file = inspection_dir / "inspection_data.json"
+
+            # Se houver imagem binária (numpy array), salve-a primeiro e remova do dict
+            if "image" in inspection_data:
+                try:
+                    image = inspection_data.pop("image")
+                    image_file = inspection_dir / "image.jpg"
+                    cv2.imwrite(str(image_file), image)
+                    inspection_data["image_file"] = str(image_file.relative_to(self.results_dir))
+                except Exception as e:
+                    log.error(f"❌ Falha ao salvar imagem da inspeção: {e}")
+                    # garante que chave image não gere problemas
+                    inspection_data.pop("image", None)
+
+            # Salva dados (sem a imagem binária) em JSON
             with open(data_file, 'w', encoding='utf-8') as f:
                 json.dump(inspection_data, f, indent=2, ensure_ascii=False)
             
-            # Salva imagem em separado (JPEG comprimido é muito menor)
-            if "image" in inspection_data:
-                # Remove imagem do JSON (é dado binário, pode pesar 5MB+)
-                image = inspection_data.pop("image")
-                image_file = inspection_dir / "image.jpg"
-                # Salva em JPEG com qualidade 85 (bom balance tamanho/qualidade)
-                cv2.imwrite(str(image_file), image)
-                # Adiciona referência ao caminho da imagem no JSON
-                inspection_data["image_file"] = str(image_file.relative_to(self.results_dir))
-                
-                # Reescreve JSON com referência à imagem
-                with open(data_file, 'w', encoding='utf-8') as f:
-                    json.dump(inspection_data, f, indent=2, ensure_ascii=False)
-            
-            log.info(f"💾 Inspeção salva em: {inspection_dir}")
+            log.info(f" Inspeção salva em: {inspection_dir}")
             
             # Adiciona ao histórico para rastreamento
             self._inspection_history.append({
@@ -628,7 +691,7 @@ class SystemCore:
         
         # Adiciona callback à lista
         self._callbacks[event].append(callback)
-        log.debug(f"📝 Callback registrado para evento: {event}")
+        log.debug(f" Callback registrado para evento: {event}")
     
     def _notify(self, event: str, data: Any):
         """
@@ -757,7 +820,7 @@ class SystemCore:
             #     # ... usar ...
             # # cleanup automático ao sair do with
         """
-        log.info("🧹 Limpando recursos do SystemCore...")
+        log.info("Limpando recursos do SystemCore...")
         
         # Libera câmera
         if self.camera_manager:

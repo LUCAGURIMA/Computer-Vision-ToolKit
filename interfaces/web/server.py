@@ -70,7 +70,7 @@ class WebServer:
         # Registra callbacks no core para notificações
         self._register_core_callbacks()
         
-        log.info(f"🌐 WebServer criado: http://{self.host}:{self.port}")
+        log.info(f"WebServer criado: http://{self.host}:{self.port}")
     
     def _setup_static_files(self):
         """Configura servidor de arquivos estáticos"""
@@ -78,7 +78,7 @@ class WebServer:
         static_dir.mkdir(parents=True, exist_ok=True)
         
         self.app.mount("/static", StaticFiles(directory=static_dir), name="static")
-        log.info(f"📁 Diretório estático: {static_dir}")
+        log.info(f"Diretório estático: {static_dir}")
         
         # Se não existir, cria página HTML básica
         index_file = static_dir / "index.html"
@@ -166,9 +166,9 @@ class WebServer:
                 </div>
                 
                 <div>
-                    <button class="btn" onclick="captureImage()">📸 Capturar Imagem</button>
-                    <button class="btn" onclick="segmentImage()">🔍 Segmentação</button>
-                    <button class="btn" onclick="classifyImage()">🏷️ Classificação</button>
+                    <button class="btn" onclick="captureImage()">Capturar Imagem</button>
+                    <button class="btn" onclick="segmentImage()">Segmentação</button>
+                    <button class="btn" onclick="classifyImage()">Classificação</button>
                 </div>
                 
                 <div class="result" id="result">
@@ -224,11 +224,11 @@ class WebServer:
                 
                 ws.onmessage = function(event) {
                     const data = JSON.parse(event.data);
-                    logMessage(`📢 ${data.event}: ${JSON.stringify(data.data)}`);
+                    logMessage(`${data.event}: ${JSON.stringify(data.data)}`);
                 };
                 
                 ws.onopen = function() {
-                    logMessage('🔌 Conectado ao servidor (WebSocket)');
+                    logMessage('Conectado ao servidor (WebSocket)');
                 };
                 
                 // Inicialização
@@ -443,10 +443,10 @@ class WebServer:
     
     def start(self):
         """Inicia o servidor web"""
-        log.info(f"🚀 Iniciando servidor web em http://{self.host}:{self.port}")
-        log.info(f"📁 Interface web: http://{self.host}:{self.port}/")
-        log.info(f"📡 API REST: http://{self.host}:{self.port}/api/status")
-        log.info(f"🔌 WebSocket: ws://{self.host}:{self.port}/ws")
+        log.info(f"Iniciando servidor web em http://{self.host}:{self.port}")
+        log.info(f"Interface web: http://{self.host}:{self.port}/")
+        log.info(f"API REST: http://{self.host}:{self.port}/api/status")
+        log.info(f"WebSocket: ws://{self.host}:{self.port}/ws")
         
         # Desabilita reload para evitar warnings - use aplicação instanciada
         uvicorn.run(

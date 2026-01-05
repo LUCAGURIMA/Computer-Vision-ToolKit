@@ -20,12 +20,14 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QTextEdit, QTabWidget, QGroupBox,
     QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QHeaderView,
-    QMessageBox, QSystemTrayIcon, QMenu, QAction, QStyle
+    QMessageBox, QSystemTrayIcon, QMenu, QAction, QStyle,
+    QDialog, QRubberBand, QLineEdit, QFileDialog
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QTimer
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QTimer, QRect, QSize
 from PyQt5.QtGui import QImage, QPixmap, QIcon, QFont
 import cv2
 import numpy as np
+import time
 
 from core.system_core import SystemCore
 from core.utils.logger import log
@@ -56,6 +58,107 @@ class CaptureThread(QThread):
                 self.error_occurred.emit("Falha na captura")
         except Exception as e:
             self.error_occurred.emit(str(e))
+
+
+class CropDialog(QDialog):
+    """Diálogo simples para selecionar uma região de crop numa imagem.
+
+    Exemplo:
+        dlg = CropDialog(image_numpy)
+        if dlg.exec_() == QDialog.Accepted:
+            bbox = dlg.bbox  # [x1,y1,x2,y2] em coordenadas da imagem original
+    """
+    def __init__(self, image: np.ndarray, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Selecionar Crop")
+        self.image = image
+        self.bbox = None
+
+        # Converte para QPixmap e escala para caber na janela mantendo proporção
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            h, w, ch = image_rgb.shape
+            bytes_per_line = ch * w
+            qimage = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        else:
+            image_rgb = image
+            h, w = image_rgb.shape[:2]
+            bytes_per_line = w
+            qimage = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_Indexed8)
+
+        pixmap = QPixmap.fromImage(qimage)
+
+        # Limita tamanho de exibição para não ultrapassar a tela
+        max_display = QSize(min(w, 800), min(h, 600))
+        display_pixmap = pixmap.scaled(max_display, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        self.label = QLabel()
+        self.label.setPixmap(display_pixmap)
+        self.label.setFixedSize(display_pixmap.size())
+        self.label.setAlignment(Qt.AlignCenter)
+
+        self.rubber = QRubberBand(QRubberBand.Rectangle, self.label)
+        self.origin = None
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.label)
+
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+
+        # Eventos do label
+        self.label.mousePressEvent = self._mouse_press
+        self.label.mouseMoveEvent = self._mouse_move
+        self.label.mouseReleaseEvent = self._mouse_release
+
+    def _mouse_press(self, event):
+        self.origin = event.pos()
+        self.rubber.setGeometry(QRect(self.origin, QSize()))
+        self.rubber.show()
+
+    def _mouse_move(self, event):
+        if self.origin:
+            rect = QRect(self.origin, event.pos()).normalized()
+            self.rubber.setGeometry(rect)
+
+    def _mouse_release(self, event):
+        if self.origin:
+            rect = self.rubber.geometry()
+            # Mapeia coordenadas do display (label/pixmap escalado) para a imagem original
+            display_pixmap = self.label.pixmap()
+            if display_pixmap is None:
+                return
+            dp_w = display_pixmap.width()
+            dp_h = display_pixmap.height()
+
+            orig_h, orig_w = self.image.shape[:2]
+
+            # fatores de escala entre imagem original e pixmap exibido
+            sx = orig_w / dp_w
+            sy = orig_h / dp_h
+
+            x1 = int(rect.left() * sx)
+            y1 = int(rect.top() * sy)
+            x2 = int(rect.right() * sx)
+            y2 = int(rect.bottom() * sy)
+
+            x1 = max(0, min(orig_w - 1, x1))
+            x2 = max(0, min(orig_w, x2))
+            y1 = max(0, min(orig_h - 1, y1))
+            y2 = max(0, min(orig_h, y2))
+
+            if x2 > x1 and y2 > y1:
+                self.bbox = [x1, y1, x2, y2]
+            self.origin = None
+            self.rubber.hide()
 
 class InspectionThread(QThread):
     """Thread para execução de inspeções"""
@@ -93,8 +196,18 @@ class MainWindow(QMainWindow):
     def __init__(self, core: SystemCore):
         super().__init__()
         self.core = core
+        # Aba de Captura: visualização apenas
         self.current_image = None
+        self.raw_image = None
+        # Aba de Inspeção: fluxo independente
+        self.inspection_image = None
+        self.inspection_raw_image = None
         self.current_results = None
+        # Crop settings
+        self.crop_enabled = False
+        self.crop_bbox = None  # [x1,y1,x2,y2]
+        # Flag para executar inspeção logo após captura automática
+        self._inspect_after_capture = None  # type: Optional[str]
         
         # Configurações da janela
         self.setWindowTitle(DESKTOP_CONFIG["window_title"])
@@ -325,7 +438,7 @@ class MainWindow(QMainWindow):
         # Botão executar
         self.inspect_btn = QPushButton("🔍 Executar Inspeção")
         self.inspect_btn.clicked.connect(self.perform_inspection)
-        self.inspect_btn.setEnabled(False)  # Habilitado só quando tem imagem
+        self.inspect_btn.setEnabled(True)  # Sempre habilitado (tem seu próprio fluxo de captura)
         
         inspection_layout.addWidget(self.inspect_btn)
         
@@ -472,6 +585,72 @@ class MainWindow(QMainWindow):
         
         system_group.setLayout(system_layout)
         layout.addWidget(system_group)
+
+        # Grupo: Crop (pré-processamento)
+        crop_group = QGroupBox("Crop / Pré-processamento")
+        crop_layout = QVBoxLayout()
+
+        crop_controls = QHBoxLayout()
+        self.crop_check = QCheckBox("Habilitar Crop automático")
+        self.crop_check.setChecked(False)
+        self.crop_check.stateChanged.connect(self._on_crop_toggled)
+        crop_controls.addWidget(self.crop_check)
+
+        self.edit_crop_btn = QPushButton("Editar Crop")
+        self.edit_crop_btn.clicked.connect(self._open_crop_editor)
+        crop_controls.addWidget(self.edit_crop_btn)
+
+        # Botão para resetar crop
+        self.reset_crop_btn = QPushButton("Resetar Crop")
+        self.reset_crop_btn.clicked.connect(self._reset_crop)
+        crop_controls.addWidget(self.reset_crop_btn)
+
+        # Botão para resetar e capturar imagem imediatamente
+        self.reset_and_capture_btn = QPushButton("Reset + Capturar")
+        self.reset_and_capture_btn.clicked.connect(self._reset_crop_and_capture)
+        crop_controls.addWidget(self.reset_and_capture_btn)
+
+        crop_layout.addLayout(crop_controls)
+        self.crop_info_label = QLabel("Crop: nenhum")
+        crop_layout.addWidget(self.crop_info_label)
+
+        crop_group.setLayout(crop_layout)
+        layout.addWidget(crop_group)
+
+        # Grupo: Captura periódica
+        periodic_group = QGroupBox("Captura Periódica (dataset)")
+        periodic_layout = QHBoxLayout()
+
+        periodic_left = QVBoxLayout()
+        interval_layout = QHBoxLayout()
+        interval_layout.addWidget(QLabel("Intervalo (s):"))
+        self.periodic_interval = QSpinBox()
+        self.periodic_interval.setRange(1, 3600)
+        self.periodic_interval.setValue(10)
+        interval_layout.addWidget(self.periodic_interval)
+        periodic_left.addLayout(interval_layout)
+
+        save_layout = QHBoxLayout()
+        save_layout.addWidget(QLabel("Pasta de salvamento:"))
+        self.periodic_save_dir = QLineEdit(str(Path.cwd() / "data" / "periodic"))
+        save_layout.addWidget(self.periodic_save_dir)
+        browse_btn = QPushButton("...")
+        browse_btn.clicked.connect(self._browse_save_dir)
+        save_layout.addWidget(browse_btn)
+        periodic_left.addLayout(save_layout)
+
+        periodic_layout.addLayout(periodic_left)
+
+        periodic_right = QVBoxLayout()
+        self.periodic_btn = QPushButton("▶ Iniciar Captura Periódica")
+        self.periodic_btn.setCheckable(True)
+        self.periodic_btn.clicked.connect(self._toggle_periodic_capture)
+        periodic_right.addWidget(self.periodic_btn)
+        periodic_right.addStretch()
+
+        periodic_layout.addLayout(periodic_right)
+        periodic_group.setLayout(periodic_layout)
+        layout.addWidget(periodic_group)
         
         layout.addStretch()
         
@@ -513,7 +692,8 @@ class MainWindow(QMainWindow):
         """Conecta callbacks do core à interface"""
         
         def on_capture_completed(data):
-            self.log_message(f"📸 Captura completada: {data.get('camera_info', {}).get('type', 'N/A')}")
+            # schedule UI update on main thread
+            QTimer.singleShot(0, lambda: self.log_message(f"📸 Captura completada: {data.get('camera_info', {}).get('type', 'N/A')}"))
         
         def on_inspection_completed(data, inspection_type):
             self.log_message(f"✅ {inspection_type.capitalize()} completada")
@@ -521,6 +701,14 @@ class MainWindow(QMainWindow):
         
         # Registra callbacks
         self.core.register_callback("capture_completed", on_capture_completed)
+        # Recebe notificações quando captura periódica salva um arquivo
+        def on_periodic_saved(data):
+            path = data.get("path")
+            ts = datetime.fromtimestamp(data.get("timestamp", time.time())).isoformat()
+            # schedule on UI thread
+            QTimer.singleShot(0, lambda: self.log_message(f"💾 Captura periódica salva: {path} @ {ts}"))
+
+        self.core.register_callback("periodic_capture_saved", on_periodic_saved)
         
         # Para outros eventos, podemos adicionar mais callbacks
     
@@ -542,6 +730,69 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             self.camera_info_label.setText(f"Câmera: Erro - {e}")
+
+    def _on_crop_toggled(self, state: int):
+        """Habilita/desabilita crop automático"""
+        self.crop_enabled = bool(state)
+        self.crop_info_label.setText(f"Crop: {'ativo' if self.crop_enabled else 'inativo'}")
+        self.log_message(f"⚙️ Crop automático {'ativado' if self.crop_enabled else 'desativado'}")
+
+    def _reset_crop(self):
+        """Reseta configuração de crop (desabilita e limpa bbox)"""
+        self.crop_bbox = None
+        self.crop_check.setChecked(False)
+        self.crop_enabled = False
+        self.crop_info_label.setText("Crop: nenhum")
+        self.log_message("✂️ Crop resetado")
+
+    def _reset_crop_and_capture(self):
+        """Reseta o crop e inicia captura imediata"""
+        # Reseta primeiro
+        self._reset_crop()
+        # Dispara captura (usa o mesmo fluxo que o botão de captura)
+        QTimer.singleShot(50, self.capture_image)
+
+    def _open_crop_editor(self):
+        """Abre diálogo para selecionar região de crop usando a imagem atual"""
+        # Preferir imagem RAW (não processada) para seleção do crop
+        img_for_edit = self.raw_image if self.raw_image is not None else self.current_image
+        if img_for_edit is None:
+            QMessageBox.warning(self, "Sem Imagem", "Capture uma imagem para editar o crop")
+            return
+
+        dlg = CropDialog(img_for_edit, parent=self)
+        if dlg.exec_() == QDialog.Accepted and dlg.bbox:
+            self.crop_bbox = dlg.bbox
+            self.crop_info_label.setText(f"Crop: {self.crop_bbox}")
+            self.log_message(f"✂️ Crop definido: {self.crop_bbox}")
+
+    def _browse_save_dir(self):
+        dirpath = QFileDialog.getExistingDirectory(self, "Escolher pasta", str(Path.cwd()))
+        if dirpath:
+            self.periodic_save_dir.setText(dirpath)
+
+    def _toggle_periodic_capture(self, checked: bool):
+        if checked:
+            interval = float(self.periodic_interval.value())
+            save_dir = self.periodic_save_dir.text()
+            try:
+                # Se crop automático estiver ativo e bbox definido, passa ops de preprocessamento
+                ops = None
+                if self.crop_enabled and self.crop_bbox:
+                    ops = [{"name": "crop", "bbox": self.crop_bbox}]
+                self.core.start_periodic_capture(interval, save_dir, preprocess_ops=ops)
+                self.periodic_btn.setText("⏸️ Parar Captura Periódica")
+                self.log_message(f"▶ Captura periódica iniciada (intervalo {interval}s) -> {save_dir}")
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Não foi possível iniciar captura periódica:\n{e}")
+                self.periodic_btn.setChecked(False)
+        else:
+            try:
+                self.core.stop_periodic_capture()
+                self.periodic_btn.setText("▶ Iniciar Captura Periódica")
+                self.log_message("⏸️ Captura periódica parada")
+            except Exception as e:
+                QMessageBox.warning(self, "Erro", f"Erro ao parar captura periódica:\n{e}")
     
     def capture_image(self):
         """Captura uma imagem (em thread separada)"""
@@ -559,13 +810,22 @@ class MainWindow(QMainWindow):
         """Slot chamado quando imagem é capturada"""
         self.capture_btn.setEnabled(True)
         self.status_label.setText("🟢 Pronto")
-        
-        # Guarda imagem
-        self.current_image = result.get("image")
+        # Guarda imagem raw e aplica pré-processamento somente para exibição/inspeção
+        raw = result.get("image")
+        self.raw_image = raw
+
+        image = raw
+        if self.crop_enabled and self.crop_bbox:
+            try:
+                ops = [{"name": "crop", "bbox": self.crop_bbox}]
+                image = self.core.preprocess_image(raw, ops)
+            except Exception as e:
+                self.log_message(f"❌ Falha ao aplicar crop: {e}")
+
+        self.current_image = image
         
         # Atualiza UI
         self.display_image(self.current_image)
-        self.inspect_btn.setEnabled(True)  # Permite inspeção
         
         # Mostra informações
         shape = self.current_image.shape if self.current_image is not None else "N/A"
@@ -576,7 +836,17 @@ class MainWindow(QMainWindow):
         )
         
         self.log_message(f"✅ Imagem capturada: {shape}")
-    
+        # Se solicitamos inspeção após a captura, inicia agora
+        if getattr(self, '_inspect_after_capture', None):
+            try:
+                inspection_type = self._inspect_after_capture
+                ui_text = "Segmentação" if inspection_type == "segmentation" else "Classificação"
+                # limpa flag antes de iniciar para evitar loops
+                self._inspect_after_capture = None
+                QTimer.singleShot(50, lambda: self._start_inspection(inspection_type, ui_text))
+            except Exception as e:
+                self.log_message(f"❌ Falha ao iniciar inspeção após captura: {e}")
+
     @pyqtSlot(str)
     def on_capture_error(self, error_msg: str):
         """Slot chamado quando há erro na captura"""
@@ -623,24 +893,72 @@ class MainWindow(QMainWindow):
             self.log_message("⏸️ Captura contínua parada")
     
     def perform_inspection(self):
-        """Executa inspeção na imagem atual"""
-        if self.current_image is None:
-            QMessageBox.warning(self, "Sem Imagem", "Capture uma imagem primeiro!")
+        """Executa inspeção na imagem dedicada da aba de Inspeção."""
+        # Mapeia texto da UI (pt-BR) para tipos do core (en)
+        ui_text = self.inspection_type_combo.currentText()
+        idx = self.inspection_type_combo.currentIndex()
+        map_types = {0: "segmentation", 1: "classification"}
+        inspection_type = map_types.get(idx, "classification")
+
+        # Se não há imagem de inspeção, capture primeiro
+        if self.inspection_image is None:
+            self._inspect_after_capture = inspection_type
+            self.log_message("📸 Aguardando captura para inspeção...")
+            # Cria thread de captura SEPARADA para inspeção
+            self.inspection_capture_thread = CaptureThread(self.core)
+            self.inspection_capture_thread.image_captured.connect(self._on_inspection_capture_completed)
+            self.inspection_capture_thread.error_occurred.connect(self._on_inspection_capture_error)
+            self.inspection_capture_thread.start()
             return
-        
-        inspection_type = self.inspection_type_combo.currentText().lower()
-        
+
+        # Caso já tenhamos imagem de inspeção, inicia a inspeção imediatamente
+        self._start_inspection(inspection_type, ui_text)
+
+    def _start_inspection(self, inspection_type: str, ui_text: str):
+        """Inicia a thread de inspeção assumindo que `self.inspection_image` existe."""
         # Desabilita botão durante inspeção
         self.inspect_btn.setEnabled(False)
-        self.status_label.setText(f"🟡 {inspection_type.capitalize()}...")
-        
-        # Cria e inicia thread de inspeção
-        self.inspection_thread = InspectionThread(
-            self.core, inspection_type, self.current_image
-        )
+        # Mostra texto da UI enquanto executa
+        self.status_label.setText(f"🟡 {ui_text}...")
+
+        # Cria e inicia thread de inspeção com tipo do core
+        # Usa inspection_image (fluxo independente da aba de captura)
+        self.inspection_thread = InspectionThread(self.core, inspection_type, self.inspection_image)
         self.inspection_thread.inspection_completed.connect(self.on_inspection_completed)
         self.inspection_thread.error_occurred.connect(self.on_inspection_error)
         self.inspection_thread.start()
+    
+    def _on_inspection_capture_completed(self, result: dict):
+        """Slot para captura dedicada à inspeção (fluxo independente)."""
+        # Guarda imagem apenas para inspeção (não afeta aba de captura)
+        raw = result.get("image")
+        self.inspection_raw_image = raw
+
+        image = raw
+        if self.crop_enabled and self.crop_bbox:
+            try:
+                ops = [{"name": "crop", "bbox": self.crop_bbox}]
+                image = self.core.preprocess_image(raw, ops)
+            except Exception as e:
+                self.log_message(f"❌ Falha ao aplicar crop: {e}")
+
+        self.inspection_image = image
+
+        # Se solicitamos inspeção após a captura, inicia agora
+        if getattr(self, '_inspect_after_capture', None):
+            try:
+                inspection_type = self._inspect_after_capture
+                ui_text = "Segmentação" if inspection_type == "segmentation" else "Classificação"
+                # limpa flag antes de iniciar para evitar loops
+                self._inspect_after_capture = None
+                QTimer.singleShot(50, lambda: self._start_inspection(inspection_type, ui_text))
+            except Exception as e:
+                self.log_message(f"❌ Falha ao iniciar inspeção após captura: {e}")
+
+    def _on_inspection_capture_error(self, error_msg: str):
+        """Erro na captura para inspeção."""
+        QMessageBox.warning(self, "Erro na Captura para Inspeção", f"Falha ao capturar imagem:\n{error_msg}")
+        self.log_message(f"❌ Erro na captura para inspeção: {error_msg}")
     
     @pyqtSlot(dict, str)
     def on_inspection_completed(self, result: dict, inspection_type: str):
@@ -734,17 +1052,17 @@ class MainWindow(QMainWindow):
     
     def save_results(self):
         """Salva resultados atuais"""
-        if self.current_results is None or self.current_image is None:
+        if self.current_results is None or self.inspection_image is None:
             QMessageBox.warning(self, "Sem Dados", "Não há resultados para salvar!")
             return
         
         try:
-            # Prepara dados da inspeção
+            # Prepara dados da inspeção (usa inspection_image, não current_image)
             inspection_type = self.inspection_type_combo.currentText().lower()
             inspection_data = {
                 "inspection_type": inspection_type,
                 "timestamp": datetime.now().isoformat(),
-                "image": self.current_image,
+                "image": self.inspection_image,
                 "results": self.current_results
             }
             
@@ -778,6 +1096,20 @@ class MainWindow(QMainWindow):
         self.save_btn.setEnabled(False)
         
         self.log_message("🧹 Resultados limpos")
+    
+    def _clear_inspection_results(self):
+        """Limpa resultados da aba de Inspeção (independente)"""
+        self.inspection_image = None
+        self.inspection_raw_image = None
+        self.current_results = None
+        
+        self.results_text.clear()
+        self.defects_table.setRowCount(0)
+        
+        self.inspect_btn.setEnabled(True)
+        self.save_btn.setEnabled(False)
+        
+        self.log_message("🧹 Resultados de inspeção limpos")
     
     def load_history(self):
         """Carrega histórico de inspeções"""

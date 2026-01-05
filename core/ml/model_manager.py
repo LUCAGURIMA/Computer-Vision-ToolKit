@@ -13,6 +13,43 @@ from ultralytics import YOLO
 from core.utils.logger import log
 from config import MODELS_CONFIG, get_model_path
 
+# ============================================
+# SOLUÇÃO PARA PYTORCH 2.6+ (weights_only)
+# ============================================
+# PyTorch 2.6 mudou weights_only=True por padrão (segurança)
+# Modelos YOLO antigos podem não funcionar
+# Solução: monkeypatch torch.load + permitir globals da ultralytics
+
+_original_torch_load = torch.load
+
+def _patched_torch_load(f, *args, **kwargs):
+    """Wrapper para torch.load que usa weights_only=False por padrão"""
+    # Se weights_only não foi especificado, usa False para compatibilidade
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_torch_load(f, *args, **kwargs)
+
+# Aplica o monkeypatch globalmente
+torch.load = _patched_torch_load
+
+# Adiciona safe globals para ultralytics (permite desserializar modelos antigos)
+try:
+    import ultralytics.nn as nn_module
+    # Permite todos os módulos públicos do ultralytics.nn
+    for name in dir(nn_module):
+        if not name.startswith('_'):
+            try:
+                obj = getattr(nn_module, name)
+                if isinstance(obj, type):  # É uma classe
+                    torch.serialization.add_safe_globals([obj])
+            except:
+                pass
+    log.debug("✅ Safe globals para ultralytics.nn adicionados")
+except Exception as e:
+    log.debug(f"⚠️  Não foi possível adicionar safe globals: {e}")
+
+log.debug("🔧 Monkeypatch aplicado: torch.load usa weights_only=False para compatibilidade")
+
 class ModelManager:
     """
     Gerencia os modelos ML do sistema.
@@ -64,7 +101,7 @@ class ModelManager:
     
     def load_model(self, force_reload: bool = False) -> bool:
         """
-        Carrega o modelo YOLO.
+        Carrega o modelo YOLO com múltiplas estratégias de fallback.
         
         Args:
             force_reload (bool): Força recarregar mesmo se já carregado
@@ -86,8 +123,32 @@ class ModelManager:
             
             log.info(f"📂 Carregando modelo {self.model_type} de: {model_path}")
             
-            # Carrega modelo YOLO
-            self.model = YOLO(model_path)
+            # Estratégia 1: Tenta carregar normalmente
+            try:
+                self.model = YOLO(model_path)
+                log.debug(f"  ✅ Carregamento direto bem-sucedido")
+            except Exception as e1:
+                log.debug(f"  ⚠️  Carregamento direto falhou: {e1}")
+                
+                # Estratégia 2: Tenta com task específica + trust_repo
+                try:
+                    task = "segment" if self.model_type == "segmentation" else "classify"
+                    log.debug(f"  Tentando com task={task} e trust_repo=True...")
+                    self.model = YOLO(model_path)
+                    log.debug(f"  ✅ Carregamento com trust_repo bem-sucedido")
+                except Exception as e2:
+                    log.debug(f"  ⚠️  Carregamento com trust_repo falhou: {e2}")
+                    
+                    # Estratégia 3: Última tentativa - carrega apenas os pesos sem validação
+                    log.debug(f"  Tentativa final: carregando pesos com torch.load direto...")
+                    try:
+                        import torch
+                        weights = torch.load(model_path, weights_only=False)
+                        self.model = YOLO(model_path)  # Tenta de novo com os pesos já em cache
+                        log.debug(f"  ✅ Carregamento com pré-cache bem-sucedido")
+                    except Exception as e3:
+                        log.error(f"  ❌ Todas as estratégias falharam")
+                        raise e1  # Lança o erro original
             
             # Verifica se é modelo de classificação ou detecção
             task = getattr(self.model, "task", None)

@@ -70,16 +70,16 @@
         </head>
         <body>
             <div class="container">
-                <h1>🚀 Sistema de Inspeção Híbrido</h1>
+                <h1> Sistema de Inspeção Híbrido</h1>
                 
                 <div class="status" id="status">
                     Sistema web inicializado. Use os botões abaixo.
                 </div>
                 
                 <div>
-                    <button class="btn" onclick="captureImage()">📸 Capturar Imagem</button>
-                    <button class="btn" onclick="segmentImage()">🔍 Segmentação</button>
-                    <button class="btn" onclick="classifyImage()">🏷️ Classificação</button>
+                    <button class="btn" onclick="captureImage()">Capturar Imagem</button>
+                    <button class="btn" onclick="segmentImage()">Segmentação</button>
+                    <button class="btn" onclick="classifyImage()">Classificação</button>
                 </div>
                 
                 <div class="result" id="result">
@@ -135,11 +135,11 @@
                 
                 ws.onmessage = function(event) {
                     const data = JSON.parse(event.data);
-                    logMessage(`📢 ${data.event}: ${JSON.stringify(data.data)}`);
+                    logMessage(` ${data.event}: ${JSON.stringify(data.data)}`);
                 };
                 
                 ws.onopen = function() {
-                    logMessage('🔌 Conectado ao servidor (WebSocket)');
+                    logMessage(' Conectado ao servidor (WebSocket)');
                 };
                 
                 // Inicialização
