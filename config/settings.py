@@ -49,19 +49,60 @@ CAMERA_CONFIG = {
 # ============================================
 # CONFIGURAÇÕES DOS MODELOS ML
 # ============================================
+# Suporta múltiplos modelos por tipo em pastas
+# Estrutura: models/segmentation/modelo.pt, models/classification/modelo.pt
 MODELS_CONFIG = {
     "segmentation": {
-        "path": str(MODELS_DIR / "segmentation_best.pt"),
+        "default_model": "fruta",  # nome do modelo sem .pt
+        "dir": str(MODELS_DIR / "segmentation"),
         "confidence_threshold": 0.45,
         "iou_threshold": 0.8,
         "image_size": 1280
     },
     "classification": {
-        "path": str(MODELS_DIR / "classification_best.pt"),
+        "default_model": "fruta",  # nome do modelo sem .pt
+        "dir": str(MODELS_DIR / "classification"),
         "confidence_threshold": 0.7,  # Se < 0.7 = INDETERMINADO
         "image_size": 640
     }
 }
+
+def get_available_models(model_type: str):
+    """
+    Lista modelos disponíveis para um tipo específico.
+    
+    Args:
+        model_type (str): "segmentation" ou "classification"
+        
+    Returns:
+        list: Lista de nomes de modelos (sem .pt)
+    """
+    model_dir = Path(MODELS_CONFIG.get(model_type, {}).get("dir", ""))
+    if not model_dir.exists():
+        return []
+    
+    # Lista arquivos .pt e remove extensão
+    models = sorted([f.stem for f in model_dir.glob("*.pt")])
+    return models
+
+def get_model_path(model_type: str, model_name: str = None) -> str:
+    """
+    Obtém caminho completo do modelo.
+    
+    Args:
+        model_type (str): "segmentation" ou "classification"
+        model_name (str): Nome do modelo sem .pt (usa default se None)
+        
+    Returns:
+        str: Caminho completo do arquivo .pt
+    """
+    config = MODELS_CONFIG.get(model_type, {})
+    model_dir = Path(config.get("dir", ""))
+    
+    if model_name is None:
+        model_name = config.get("default_model", "fruta")
+    
+    return str(model_dir / f"{model_name}.pt")
 
 # ============================================
 # CONFIGURAÇÕES DO SERVIDOR WEB
@@ -133,19 +174,6 @@ def load_config():
 # ============================================
 # UTILITÁRIOS
 # ============================================
-def get_model_path(model_type: str) -> str:
-    """Retorna caminho do modelo com fallback"""
-    if model_type in MODELS_CONFIG:
-        path = MODELS_CONFIG[model_type]["path"]
-        if Path(path).exists():
-            return path
-    
-    # Fallback: procura qualquer arquivo .pt no diretório
-    pt_files = list(MODELS_DIR.glob("*.pt"))
-    if pt_files:
-        return str(pt_files[0])
-    
-    raise FileNotFoundError(f"Nenhum modelo encontrado em {MODELS_DIR}")
 
 # Teste rápido
 if __name__ == "__main__":

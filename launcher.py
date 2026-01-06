@@ -188,12 +188,9 @@ def run_desktop_app(core):
         
         from interfaces.desktop.app import start_desktop_app
         
-        # Inicia aplicação Qt
-        app = QApplication(sys.argv)
-        start_desktop_app(core)
-        
-        # Executa loop principal
-        return app.exec_()
+        # Delega a inicialização/execução para start_desktop_app
+        # start_desktop_app cria a QApplication e executa o loop
+        return start_desktop_app(core)
         
     except ImportError as e:
         print(f"❌ Erro ao importar módulo desktop: {e}")

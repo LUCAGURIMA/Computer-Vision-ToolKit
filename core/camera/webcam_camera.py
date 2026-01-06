@@ -126,6 +126,114 @@ class WebcamCamera(ICamera):
             cap.release()
             return True
         return False
+    
+    def get_parameters(self) -> Dict[str, Any]:
+        """Retorna parâmetros ajustáveis da webcam (genéricos OpenCV)"""
+        if not self._initialized or self._cap is None:
+            return {}
+        
+        return {
+            "brightness": {
+                "value": self._cap.get(cv2.CAP_PROP_BRIGHTNESS),
+                "type": "float",
+                "label": "Brilho",
+                "min": -100,
+                "max": 100,
+                "step": 5,
+                "description": "Ajusta brilho da imagem (-100 a 100)"
+            },
+            "contrast": {
+                "value": self._cap.get(cv2.CAP_PROP_CONTRAST),
+                "type": "float",
+                "label": "Contraste",
+                "min": 0,
+                "max": 100,
+                "step": 5,
+                "description": "Ajusta contraste da imagem (0 a 100)"
+            },
+            "saturation": {
+                "value": self._cap.get(cv2.CAP_PROP_SATURATION),
+                "type": "float",
+                "label": "Saturação",
+                "min": 0,
+                "max": 100,
+                "step": 5,
+                "description": "Ajusta saturação de cores (0 a 100)"
+            },
+            "hue": {
+                "value": self._cap.get(cv2.CAP_PROP_HUE),
+                "type": "float",
+                "label": "Matiz",
+                "min": -180,
+                "max": 180,
+                "step": 10,
+                "description": "Rotação de cor em graus"
+            },
+            "exposure": {
+                "value": self._cap.get(cv2.CAP_PROP_EXPOSURE),
+                "type": "float",
+                "label": "Exposição",
+                "min": -13,
+                "max": 0,
+                "step": 1,
+                "description": "Ajusta tempo de exposição (log scale, -13 a 0)"
+            },
+            "gain": {
+                "value": self._cap.get(cv2.CAP_PROP_GAIN),
+                "type": "float",
+                "label": "Ganho",
+                "min": 0,
+                "max": 100,
+                "step": 5,
+                "description": "Ganho do sensor (0 a 100)"
+            },
+            "width": {
+                "value": int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                "type": "int",
+                "label": "Largura",
+                "min": 320,
+                "max": 3840,
+                "step": 160,
+                "description": "Largura da imagem em pixels"
+            },
+            "height": {
+                "value": int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                "type": "int",
+                "label": "Altura",
+                "min": 240,
+                "max": 2160,
+                "step": 120,
+                "description": "Altura da imagem em pixels"
+            }
+        }
+    
+    def set_parameter(self, param_name: str, value: Any) -> bool:
+        """Define parâmetro da webcam"""
+        if not self._initialized or self._cap is None:
+            return False
+        
+        try:
+            # Mapeia nomes de parâmetros para constantes OpenCV
+            param_map = {
+                "brightness": cv2.CAP_PROP_BRIGHTNESS,
+                "contrast": cv2.CAP_PROP_CONTRAST,
+                "saturation": cv2.CAP_PROP_SATURATION,
+                "hue": cv2.CAP_PROP_HUE,
+                "exposure": cv2.CAP_PROP_EXPOSURE,
+                "gain": cv2.CAP_PROP_GAIN,
+                "width": cv2.CAP_PROP_FRAME_WIDTH,
+                "height": cv2.CAP_PROP_FRAME_HEIGHT,
+            }
+            
+            if param_name in param_map:
+                self._cap.set(param_map[param_name], float(value))
+                log.info(f"📷 Webcam: {param_name} = {value}")
+                return True
+            
+            return False
+        except Exception as e:
+            log.error(f"Erro ao ajustar webcam: {e}")
+            return False
 
 # Teste rápido
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ import json
 from datetime import datetime
 from typing import Dict, Any
 from pathlib import Path
+from queue import Queue
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -27,11 +28,12 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QTimer, QRect, QSize
 from PyQt5.QtGui import QImage, QPixmap, QIcon, QFont
 import cv2
 import numpy as np
+import signal
 import time
 
 from core.system_core import SystemCore
 from core.utils.logger import log
-from config import DESKTOP_CONFIG, ASSETS_DIR
+from config import DESKTOP_CONFIG, ASSETS_DIR, get_available_models
 
 # ============================================
 # THREADS PARA OPERAÇÕES BLOQUEANTES
@@ -58,6 +60,66 @@ class CaptureThread(QThread):
                 self.error_occurred.emit("Falha na captura")
         except Exception as e:
             self.error_occurred.emit(str(e))
+
+
+class StreamingThread(QThread):
+    """Thread para streaming contínuo de câmera (30 FPS)"""
+    
+    # Sinais para enviar frames para UI
+    frame_ready = pyqtSignal(np.ndarray)   # Emite frames continuamente
+    error_occurred = pyqtSignal(str)       # Emite quando há erro
+    fps_info = pyqtSignal(float)           # Emite FPS atual
+    
+    def __init__(self, core: SystemCore, target_fps: int = 30):
+        super().__init__()
+        self.core = core
+        self.target_fps = target_fps
+        self.frame_interval = 1.0 / target_fps
+        self.running = True
+        self.frame_count = 0
+        self.start_time = time.time()
+    
+    def run(self):
+        """Captura e envia frames continuamente"""
+        try:
+            while self.running:
+                loop_start = time.time()
+                
+                try:
+                    # Captura um frame
+                    result = self.core.capture_image()
+                    
+                    if result and result.get("success"):
+                        frame = result.get("image")
+                        if frame is not None:
+                            self.frame_ready.emit(frame)
+                            self.frame_count += 1
+                    
+                except Exception as e:
+                    log.debug(f"Erro ao capturar frame: {e}")
+                    continue
+                
+                # Controla FPS
+                elapsed = time.time() - loop_start
+                sleep_time = max(0, self.frame_interval - elapsed)
+                
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                
+                # Emite FPS a cada 30 frames
+                if self.frame_count % 30 == 0:
+                    current_fps = 30 / (time.time() - self.start_time + 0.001)
+                    self.fps_info.emit(current_fps)
+                    self.frame_count = 0
+                    self.start_time = time.time()
+        
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+    
+    def stop(self):
+        """Para o streaming"""
+        self.running = False
+        self.wait()
 
 
 class CropDialog(QDialog):
@@ -166,18 +228,19 @@ class InspectionThread(QThread):
     inspection_completed = pyqtSignal(dict, str)  # Resultado e tipo
     error_occurred = pyqtSignal(str)
     
-    def __init__(self, core: SystemCore, inspection_type: str, image: np.ndarray = None):
+    def __init__(self, core: SystemCore, inspection_type: str, image: np.ndarray = None, model_name: str = None):
         super().__init__()
         self.core = core
         self.inspection_type = inspection_type
         self.image = image
+        self.model_name = model_name  # Nome do modelo (sem .pt)
     
     def run(self):
         try:
             if self.inspection_type == "segmentation":
-                result = self.core.perform_segmentation(self.image)
+                result = self.core.perform_segmentation(self.image, model_name=self.model_name)
             elif self.inspection_type == "classification":
-                result = self.core.perform_classification(self.image)
+                result = self.core.perform_classification(self.image, model_name=self.model_name)
             else:
                 raise ValueError(f"Tipo de inspeção inválido: {self.inspection_type}")
             
@@ -185,6 +248,299 @@ class InspectionThread(QThread):
             
         except Exception as e:
             self.error_occurred.emit(str(e))
+
+
+class DetectionDialog(QDialog):
+    """Diálogo para exibir imagem com detecções desenhadas"""
+    
+    def __init__(self, image: np.ndarray, result: dict, inspection_type: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Resultados da Inspeção")
+        self.setGeometry(100, 100, 1000, 800)
+        
+        self.image = image.copy()
+        self.result = result
+        self.inspection_type = inspection_type
+        
+        # Desenha anotações na imagem
+        self.annotated_image = self._draw_detections()
+        
+        # Layout principal
+        layout = QVBoxLayout()
+        
+        # Informações de resultado
+        info_layout = QHBoxLayout()
+        self._add_result_info(info_layout)
+        layout.addLayout(info_layout)
+        
+        # Imagem anotada
+        image_label = QLabel()
+        image_label.setAlignment(Qt.AlignCenter)
+        pixmap = self._numpy_to_pixmap(self.annotated_image)
+        image_label.setPixmap(pixmap.scaled(900, 600, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        layout.addWidget(image_label)
+        
+        # Botões
+        btn_layout = QHBoxLayout()
+        close_btn = QPushButton("Fechar")
+        close_btn.clicked.connect(self.accept)
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        
+        self.setLayout(layout)
+    
+    def _draw_detections(self) -> np.ndarray:
+        """Desenha bboxes na imagem"""
+        annotated = self.image.copy()
+        
+        if self.inspection_type == "segmentation":
+            defects = self.result.get("defects", [])
+            
+            # Cores diferentes para bboxes
+            colors = [
+                (0, 255, 0),      # Verde
+                (255, 0, 0),      # Azul
+                (0, 255, 255),    # Amarelo
+                (255, 0, 255),    # Magenta
+                (255, 127, 0),    # Laranja
+            ]
+            
+            for i, defect in enumerate(defects):
+                bbox = defect.get("bbox", [])
+                if len(bbox) >= 4:
+                    x1, y1, x2, y2 = map(int, bbox[:4])
+                    confidence = defect.get("confidence", 0)
+                    class_name = defect.get("class_name", "Desconhecido")
+                    
+                    # Desenha retângulo
+                    color = colors[i % len(colors)]
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                    
+                    # Desenha label com confiança
+                    label = f"{class_name}: {confidence:.2%}"
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.6
+                    thickness = 1
+                    
+                    # Fundo para label
+                    text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
+                    cv2.rectangle(
+                        annotated,
+                        (x1, y1 - text_size[1] - 5),
+                        (x1 + text_size[0], y1),
+                        color,
+                        -1
+                    )
+                    
+                    # Texto
+                    cv2.putText(
+                        annotated,
+                        label,
+                        (x1, y1 - 5),
+                        font,
+                        font_scale,
+                        (255, 255, 255),
+                        thickness
+                    )
+        
+        elif self.inspection_type == "classification":
+            # Para classificação, desenha apenas um retângulo grande
+            h, w = annotated.shape[:2]
+            status = self.result.get("status", "unknown")
+            
+            if status == "indeterminado":
+                color = (0, 127, 255)  # Laranja
+                label = "INDETERMINADO"
+            elif self.result.get("defects_detected"):
+                color = (0, 0, 255)  # Vermelho
+                label = "FRUTA RUIM"
+            else:
+                color = (0, 255, 0)  # Verde
+                label = "FRUTA BOA"
+            
+            # Desenha borda grossa
+            cv2.rectangle(annotated, (10, 10), (w - 10, h - 10), color, 3)
+            
+            # Desenha label no topo
+            defects_info = self.result.get("defects_info", [])
+            if defects_info:
+                defect = defects_info[0]
+                confidence = defect.get("confidence", 0)
+                label_text = f"{label} ({confidence:.1%})"
+            else:
+                label_text = label
+            
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1.5
+            thickness = 2
+            text_size = cv2.getTextSize(label_text, font, font_scale, thickness)[0]
+            
+            # Fundo para label
+            cv2.rectangle(
+                annotated,
+                (20, 30),
+                (20 + text_size[0], 30 + text_size[1] + 10),
+                color,
+                -1
+            )
+            
+            # Texto
+            cv2.putText(
+                annotated,
+                label_text,
+                (20, 50),
+                font,
+                font_scale,
+                (255, 255, 255),
+                thickness
+            )
+        
+        return annotated
+    
+    def _add_result_info(self, layout: QHBoxLayout):
+        """Adiciona informações de resultado no layout"""
+        if self.inspection_type == "segmentation":
+            total_defects = self.result.get("total_defects", 0)
+            has_defects = self.result.get("has_defects", False)
+            
+            if has_defects:
+                info_text = f"⚠️ {total_defects} DEFEITO(S) ENCONTRADO(S)"
+                info_color = "orange"
+            else:
+                info_text = "✅ NENHUM DEFEITO ENCONTRADO"
+                info_color = "green"
+        
+        elif self.inspection_type == "classification":
+            status = self.result.get("status", "unknown")
+            defects_detected = self.result.get("defects_detected", False)
+            
+            if status == "indeterminado":
+                info_text = "🔶 INDETERMINADO"
+                info_color = "orange"
+            elif defects_detected:
+                info_text = "❌ FRUTA RUIM"
+                info_color = "red"
+            else:
+                info_text = "✅ FRUTA BOA"
+                info_color = "green"
+        
+        label = QLabel(info_text)
+        label.setStyleSheet(f"color: {info_color}; font-weight: bold; font-size: 14px;")
+        layout.addWidget(label)
+        layout.addStretch()
+    
+    def _numpy_to_pixmap(self, image: np.ndarray) -> QPixmap:
+        """Converte numpy array para QPixmap"""
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        else:
+            image_rgb = image
+        
+        h, w = image_rgb.shape[:2]
+        if len(image_rgb.shape) == 3:
+            bytes_per_line = 3 * w
+            qimage = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        else:
+            bytes_per_line = w
+            qimage = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_Indexed8)
+        
+        return QPixmap.fromImage(qimage)
+
+class StreamingPopupWindow(QDialog):
+    """Janela popup para streaming de vídeo em tempo real"""
+    
+    popup_closed = pyqtSignal()  # Signal emitido quando popup é fechada
+    
+    def __init__(self, core: SystemCore, parent=None):
+        super().__init__(parent)
+        self.core = core
+        self.streaming_thread = None
+        
+        # Configuração da janela
+        self.setWindowTitle("🎥 Streaming de Câmera")
+        self.setGeometry(100, 100, 800, 600)
+        self.setModal(False)  # Não bloqueante
+        
+        # Layout principal
+        layout = QVBoxLayout()
+        
+        # Label para imagem
+        self.image_label = QLabel("Iniciando streaming...")
+        self.image_label.setMinimumSize(640, 480)
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet("border: 2px solid #555; background-color: #1a1a1a;")
+        layout.addWidget(self.image_label)
+        
+        # Informações (FPS, resolução)
+        self.info_label = QLabel("FPS: -- | Resolução: --")
+        layout.addWidget(self.info_label)
+        
+        # Botão fechar
+        close_btn = QPushButton("✖️ Fechar Streaming")
+        close_btn.clicked.connect(self.stop_streaming)
+        layout.addWidget(close_btn)
+        
+        self.setLayout(layout)
+        
+        # Inicia streaming ao abrir
+        self.start_streaming()
+    
+    def start_streaming(self):
+        """Inicia thread de streaming"""
+        self.streaming_thread = StreamingThread(self.core, target_fps=30)
+        self.streaming_thread.frame_ready.connect(self._on_streaming_frame)
+        self.streaming_thread.fps_info.connect(self._on_streaming_fps)
+        self.streaming_thread.error_occurred.connect(self._on_streaming_error)
+        self.streaming_thread.start()
+    
+    @pyqtSlot(np.ndarray)
+    def _on_streaming_frame(self, frame: np.ndarray):
+        """Recebe frame e exibe"""
+        try:
+            # Converte BGR para RGB
+            if len(frame.shape) == 3 and frame.shape[2] == 3:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            else:
+                frame_rgb = frame
+            
+            h, w = frame_rgb.shape[:2]
+            bytes_per_line = 3 * w if len(frame_rgb.shape) == 3 else w
+            qimage = QImage(frame_rgb.data, w, h, bytes_per_line, 
+                          QImage.Format_RGB888 if len(frame_rgb.shape) == 3 else QImage.Format_Indexed8)
+            
+            pixmap = QPixmap.fromImage(qimage)
+            label_size = self.image_label.size()
+            scaled_pixmap = pixmap.scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            
+            self.image_label.setPixmap(scaled_pixmap)
+        except Exception as e:
+            log.debug(f"Erro ao exibir frame: {e}")
+    
+    @pyqtSlot(float)
+    def _on_streaming_fps(self, fps: float):
+        """Atualiza informações de FPS"""
+        shape = "?" if not hasattr(self, '_current_frame') else self._current_frame.shape
+        self.info_label.setText(f"FPS: {fps:.1f} | Resolução: --")
+    
+    @pyqtSlot(str)
+    def _on_streaming_error(self, error_msg: str):
+        """Trata erro no streaming"""
+        QMessageBox.warning(self, "Erro no Streaming", f"Erro: {error_msg}")
+        self.close()
+    
+    def stop_streaming(self):
+        """Para o streaming e fecha a janela"""
+        if self.streaming_thread:
+            self.streaming_thread.stop()
+            self.streaming_thread = None
+        self.close()
+    
+    def closeEvent(self, event):
+        """Ao fechar a janela, para o streaming e emite signal"""
+        self.stop_streaming()
+        self.popup_closed.emit()  # Notifica MainWindow que popup foi fechada
+        event.accept()
 
 # ============================================
 # JANELA PRINCIPAL
@@ -208,6 +564,9 @@ class MainWindow(QMainWindow):
         self.crop_bbox = None  # [x1,y1,x2,y2]
         # Flag para executar inspeção logo após captura automática
         self._inspect_after_capture = None  # type: Optional[str]
+        
+        # Streaming thread (para captura contínua)
+        self.streaming_thread = None
         
         # Configurações da janela
         self.setWindowTitle(DESKTOP_CONFIG["window_title"])
@@ -304,7 +663,7 @@ class MainWindow(QMainWindow):
         top_bar = QHBoxLayout()
         
         # Título
-        title_label = QLabel("🔬 SISTEMA DE INSPEÇÃO HÍBRIDO")
+        title_label = QLabel("SISTEMA DE INSPEÇÃO HÍBRIDO")
         title_font = QFont()
         title_font.setPointSize(14)
         title_font.setBold(True)
@@ -375,11 +734,37 @@ class MainWindow(QMainWindow):
         
         self.capture_btn = QPushButton("📸 Capturar Imagem")
         self.capture_btn.clicked.connect(self.capture_image)
+        self.capture_btn.setToolTip(
+            "Captura uma única imagem da câmera.\n\n"
+            "O que faz:\n"
+            "• Conecta à câmera (com fallback automático)\n"
+            "• Captura 1 frame em alta qualidade\n"
+            "• Aplica crop automático (se habilitado)\n"
+            "• Exibe imagem neste painel\n\n"
+            "Uso:\n"
+            "1. Posicione o produto\n"
+            "2. Clique para capturar\n"
+            "3. Vá para aba 'Inspeção' para analisar\n\n"
+            "💡 Para preview contínuo:\n"
+            "clique em 'Captura Contínua'"
+        )
         btn_layout.addWidget(self.capture_btn)
         
-        self.capture_continuous_btn = QPushButton("🎥 Captura Contínua")
-        self.capture_continuous_btn.setCheckable(True)
-        self.capture_continuous_btn.clicked.connect(self.toggle_continuous_capture)
+        self.capture_continuous_btn = QPushButton("🎥 Abrir Streaming")
+        self.capture_continuous_btn.clicked.connect(lambda: self.toggle_continuous_capture(True))
+        self.capture_continuous_btn.setToolTip(
+            "Ativa streaming em tempo real (30 FPS).\n\n"
+            "O que faz:\n"
+            "• Thread separada captura a cada 30ms\n"
+            "• Mostra preview contínuo da câmera\n"
+            "• Exibe FPS em tempo real\n"
+            "• Sem travamento da interface\n\n"
+            "Uso:\n"
+            "• Clique para iniciar streaming\n"
+            "• Clique novamente para parar\n"
+            "• Veja o FPS no canto inferior\n\n"
+            "💡 Perfeito para posicionar o produto"
+        )
         btn_layout.addWidget(self.capture_continuous_btn)
         
         capture_layout.addLayout(btn_layout)
@@ -430,7 +815,18 @@ class MainWindow(QMainWindow):
         
         self.inspection_type_combo = QComboBox()
         self.inspection_type_combo.addItems(["Segmentação", "Classificação"])
+        self.inspection_type_combo.currentIndexChanged.connect(self._on_inspection_type_changed)
         type_layout.addWidget(self.inspection_type_combo)
+        
+        # Seleção de modelo
+        type_layout.addWidget(QLabel("Modelo:"))
+        
+        self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(200)
+        type_layout.addWidget(self.model_combo)
+        
+        # Carrega modelos iniciais
+        self._on_inspection_type_changed()
         
         type_layout.addStretch()
         inspection_layout.addLayout(type_layout)
@@ -439,6 +835,21 @@ class MainWindow(QMainWindow):
         self.inspect_btn = QPushButton("🔍 Executar Inspeção")
         self.inspect_btn.clicked.connect(self.perform_inspection)
         self.inspect_btn.setEnabled(True)  # Sempre habilitado (tem seu próprio fluxo de captura)
+        self.inspect_btn.setToolTip(
+            "Executa análise inteligente na imagem.\n\n"
+            "Escolha o tipo:\n"
+            "• Segmentação: Detecta e localiza defeitos\n"
+            "  (mostra bbox, confiança, coordenadas)\n"
+            "• Classificação: Classifica BOM ou RUIM\n"
+            "  (retorna status e confiança geral)\n\n"
+            "O que faz:\n"
+            "1. Se não houver imagem, captura uma\n"
+            "2. Executa modelo YOLO selecionado\n"
+            "3. Processa resultados\n"
+            "4. Mostra dados na tabela\n\n"
+            "💡 Clique 'Salvar' para guardar resultado\n"
+            "e ver imagem anotada com detecções"
+        )
         
         inspection_layout.addWidget(self.inspect_btn)
         
@@ -472,10 +883,40 @@ class MainWindow(QMainWindow):
         self.save_btn = QPushButton("💾 Salvar Resultados")
         self.save_btn.clicked.connect(self.save_results)
         self.save_btn.setEnabled(False)
+        self.save_btn.setToolTip(
+            "Salva os resultados da inspeção em disco.\n\n"
+            "O que faz:\n"
+            "• Cria uma pasta com data/hora em data/results/\n"
+            "• Salva a imagem + resultados em JSON\n"
+            "• Mostra popup com imagem anotada (bboxes)\n"
+            "• Atualiza o histórico de inspeções\n\n"
+            "Dados salvos:\n"
+            "- Timestamp da captura\n"
+            "- Tipo de inspeção (Segmentação/Classificação)\n"
+            "- Imagem capturada\n"
+            "- Resultados e detecções\n\n"
+            "💡 Dica: Clique em 'Ver' no histórico\n"
+            "para visualizar inspeções antigas"
+        )
         actions_layout.addWidget(self.save_btn)
         
         self.clear_btn = QPushButton("🗑️ Limpar")
-        self.clear_btn.clicked.connect(self.clear_results)
+        # Limpar resultados da aba de inspeção deve usar rotina específica
+        # para não desabilitar permanentemente o botão de inspeção.
+        self.clear_btn.clicked.connect(self._clear_inspection_results)
+        self.clear_btn.setToolTip(
+            "Limpa os resultados da sessão atual.\n\n"
+            "O que faz:\n"
+            "• Remove imagem da tela\n"
+            "• Limpa resultados exibidos\n"
+            "• Esvazia a tabela de defeitos\n"
+            "• Remove dados da sessão\n\n"
+            "⚠️ IMPORTANTE:\n"
+            "❌ NÃO apaga dados salvos em disk\n"
+            "✅ Apenas limpa a visualização atual\n\n"
+            "💡 Use este botão para iniciar\n"
+            "uma nova inspeção"
+        )
         actions_layout.addWidget(self.clear_btn)
         
         actions_group.setLayout(actions_layout)
@@ -545,6 +986,35 @@ class MainWindow(QMainWindow):
         camera_group.setLayout(camera_layout)
         layout.addWidget(camera_group)
         
+        # Grupo: Parâmetros da Câmera (dinâmico)
+        self.camera_params_group = QGroupBox("Parâmetros da Câmera Ativa")
+        self.camera_params_layout = QVBoxLayout()
+        
+        # Label informativo
+        self.camera_params_info = QLabel("Selecione uma câmera e ajuste seus parâmetros")
+        self.camera_params_info.setStyleSheet("color: #888; font-size: 11px; font-style: italic;")
+        self.camera_params_layout.addWidget(self.camera_params_info)
+        
+        # Container scrollável para parâmetros
+        params_scroll = QWidget()
+        self.camera_params_scroll_layout = QVBoxLayout()
+        params_scroll.setLayout(self.camera_params_scroll_layout)
+        
+        scroll = QVBoxLayout()
+        scroll.addWidget(params_scroll)
+        self.camera_params_layout.addLayout(scroll)
+        
+        # Botão para recarregar parâmetros
+        reload_params_btn = QPushButton("🔄 Recarregar Parâmetros")
+        reload_params_btn.clicked.connect(self._reload_camera_parameters)
+        self.camera_params_layout.addWidget(reload_params_btn)
+        
+        self.camera_params_group.setLayout(self.camera_params_layout)
+        layout.addWidget(self.camera_params_group)
+        
+        # Carrega parâmetros iniciais
+        QTimer.singleShot(500, self._reload_camera_parameters)
+        
         # Grupo: Modelos
         model_group = QGroupBox("Configurações dos Modelos")
         model_layout = QVBoxLayout()
@@ -562,7 +1032,7 @@ class MainWindow(QMainWindow):
         model_layout.addLayout(thresh_layout)
         
         # Botão recarregar modelos
-        model_btn = QPushButton("🤖 Recarregar Modelos")
+        model_btn = QPushButton("Recarregar Modelos")
         model_btn.clicked.connect(self.reload_models)
         model_layout.addWidget(model_btn)
         
@@ -882,37 +1352,80 @@ class MainWindow(QMainWindow):
         self.image_label.setPixmap(scaled_pixmap)
     
     def toggle_continuous_capture(self, checked: bool):
-        """Ativa/desativa captura contínua"""
-        if checked:
-            self.capture_continuous_btn.setText("⏸️ Parar Captura")
-            self.capture_timer.start(1000)  # 1 segundo
-            self.log_message("🎥 Captura contínua iniciada")
-        else:
-            self.capture_continuous_btn.setText("🎥 Captura Contínua")
-            self.capture_timer.stop()
-            self.log_message("⏸️ Captura contínua parada")
+        """Abre janela popup de streaming"""
+        # Abre popup de streaming (sempre abre quando clicado, não é toggle)
+        self.streaming_popup = StreamingPopupWindow(self.core, parent=self)
+        # Conecta signal de fechamento para re-habilitar botão
+        self.streaming_popup.popup_closed.connect(self._on_streaming_popup_closed)
+        self.streaming_popup.show()
+        
+        # Desabilita o botão enquanto popup está aberto
+        self.capture_continuous_btn.setEnabled(False)
+        self.log_message("🎥 Janela de streaming aberta")
+    
+    def _on_streaming_popup_closed(self):
+        """Slot chamado quando popup de streaming é fechada"""
+        self.capture_continuous_btn.setEnabled(True)
+        self.streaming_popup = None
+        self.log_message("⏸️ Streaming fechado")
+    
+    def _on_inspection_type_changed(self):
+        """Atualiza lista de modelos quando tipo de inspeção muda"""
+        try:
+            # Mapeia texto da UI para tipo de modelo
+            ui_text = self.inspection_type_combo.currentText()
+            model_type = "classification" if "Classificação" in ui_text else "segmentation"
+            
+            # Carrega modelos disponíveis
+            available_models = get_available_models(model_type)
+            
+            self.model_combo.clear()
+            if available_models:
+                self.model_combo.addItems(available_models)
+                # Só loga se a interface foi criada
+                if hasattr(self, 'results_text'):
+                    self.log_message(f"✅ {len(available_models)} modelo(s) carregado(s): {', '.join(available_models)}")
+            else:
+                self.model_combo.addItem("(nenhum modelo encontrado)")
+                if hasattr(self, 'results_text'):
+                    self.log_message(f"⚠️ Nenhum modelo encontrado para {model_type}")
+        except Exception as e:
+            if hasattr(self, 'results_text'):
+                self.log_message(f"❌ Erro ao carregar modelos: {e}")
+    
+    @pyqtSlot(np.ndarray)
+    def _on_streaming_frame(self, frame: np.ndarray):
+        """DEPRECATED - streaming agora usa popup"""
+        pass
+    
+    @pyqtSlot(float)
+    def _on_streaming_fps(self, fps: float):
+        """DEPRECATED - streaming agora usa popup"""
+        pass
+    
+    @pyqtSlot(str)
+    def _on_streaming_error(self, error_msg: str):
+        """DEPRECATED - streaming agora usa popup"""
+        pass
     
     def perform_inspection(self):
-        """Executa inspeção na imagem dedicada da aba de Inspeção."""
+        """Executa inspeção capturando uma nova imagem"""
         # Mapeia texto da UI (pt-BR) para tipos do core (en)
         ui_text = self.inspection_type_combo.currentText()
         idx = self.inspection_type_combo.currentIndex()
         map_types = {0: "segmentation", 1: "classification"}
         inspection_type = map_types.get(idx, "classification")
 
-        # Se não há imagem de inspeção, capture primeiro
-        if self.inspection_image is None:
-            self._inspect_after_capture = inspection_type
-            self.log_message("📸 Aguardando captura para inspeção...")
-            # Cria thread de captura SEPARADA para inspeção
-            self.inspection_capture_thread = CaptureThread(self.core)
-            self.inspection_capture_thread.image_captured.connect(self._on_inspection_capture_completed)
-            self.inspection_capture_thread.error_occurred.connect(self._on_inspection_capture_error)
-            self.inspection_capture_thread.start()
-            return
-
-        # Caso já tenhamos imagem de inspeção, inicia a inspeção imediatamente
-        self._start_inspection(inspection_type, ui_text)
+        # SEMPRE captura uma nova imagem ao clicar em "Executar Inspeção"
+        # Isso garante que cada clique resulta em uma nova análise
+        self._inspect_after_capture = inspection_type
+        self.log_message("📸 Capturando imagem para inspeção...")
+        
+        # Cria thread de captura SEPARADA para inspeção
+        self.inspection_capture_thread = CaptureThread(self.core)
+        self.inspection_capture_thread.image_captured.connect(self._on_inspection_capture_completed)
+        self.inspection_capture_thread.error_occurred.connect(self._on_inspection_capture_error)
+        self.inspection_capture_thread.start()
 
     def _start_inspection(self, inspection_type: str, ui_text: str):
         """Inicia a thread de inspeção assumindo que `self.inspection_image` existe."""
@@ -921,9 +1434,21 @@ class MainWindow(QMainWindow):
         # Mostra texto da UI enquanto executa
         self.status_label.setText(f"🟡 {ui_text}...")
 
-        # Cria e inicia thread de inspeção com tipo do core
+        # Obtém modelo selecionado
+        model_name = self.model_combo.currentText()
+        if not model_name or "nenhum modelo" in model_name.lower():
+            QMessageBox.warning(self, "Erro", "Nenhum modelo disponível!")
+            self.inspect_btn.setEnabled(True)
+            return
+
+        # Cria e inicia thread de inspeção com modelo selecionado
         # Usa inspection_image (fluxo independente da aba de captura)
-        self.inspection_thread = InspectionThread(self.core, inspection_type, self.inspection_image)
+        self.inspection_thread = InspectionThread(
+            self.core, 
+            inspection_type, 
+            self.inspection_image,
+            model_name=model_name  # Passa nome do modelo
+        )
         self.inspection_thread.inspection_completed.connect(self.on_inspection_completed)
         self.inspection_thread.error_occurred.connect(self.on_inspection_error)
         self.inspection_thread.start()
@@ -1019,6 +1544,16 @@ class MainWindow(QMainWindow):
                 
                 self.results_text.setText(text)
                 self.results_text.setStyleSheet(f"color: {text_color}; font-weight: bold;")
+                
+                # Preenche tabela com resultado da classificação
+                self.defects_table.setRowCount(1)
+                self.defects_table.setItem(0, 0, QTableWidgetItem(class_name))
+                self.defects_table.setItem(0, 1, QTableWidgetItem(f"{confidence:.3f}"))
+                # Colunas X, Y, Largura, Altura ficam vazias para classificação
+                self.defects_table.setItem(0, 2, QTableWidgetItem("N/A"))
+                self.defects_table.setItem(0, 3, QTableWidgetItem("N/A"))
+                self.defects_table.setItem(0, 4, QTableWidgetItem("N/A"))
+                self.defects_table.setItem(0, 5, QTableWidgetItem("N/A"))
         
         elif inspection_type == "segmentation":
             defects = result.get("defects", [])
@@ -1039,26 +1574,36 @@ class MainWindow(QMainWindow):
             if defects:
                 self.defects_table.setRowCount(len(defects))
                 for i, defect in enumerate(defects):
+                    # Classe e confiança
                     self.defects_table.setItem(i, 0, QTableWidgetItem(defect.get("class_name", "N/A")))
                     self.defects_table.setItem(i, 1, QTableWidgetItem(f"{defect.get('confidence', 0):.3f}"))
                     
+                    # BBox: converte de [x1, y1, x2, y2] para [x, y, largura, altura]
                     bbox = defect.get("bbox", [0, 0, 0, 0])
-                    if len(bbox) == 4:
-                        x, y, w, h = bbox
+                    if len(bbox) >= 4:
+                        x1, y1, x2, y2 = bbox[:4]
+                        x = float(x1)
+                        y = float(y1)
+                        largura = float(x2) - float(x1)
+                        altura = float(y2) - float(y1)
+                        
                         self.defects_table.setItem(i, 2, QTableWidgetItem(f"{x:.0f}"))
                         self.defects_table.setItem(i, 3, QTableWidgetItem(f"{y:.0f}"))
-                        self.defects_table.setItem(i, 4, QTableWidgetItem(f"{w:.0f}"))
-                        self.defects_table.setItem(i, 5, QTableWidgetItem(f"{h:.0f}"))
+                        self.defects_table.setItem(i, 4, QTableWidgetItem(f"{largura:.0f}"))
+                        self.defects_table.setItem(i, 5, QTableWidgetItem(f"{altura:.0f}"))
     
     def save_results(self):
-        """Salva resultados atuais"""
+        """Salva resultados e mostra diálogo com imagem anotada"""
         if self.current_results is None or self.inspection_image is None:
             QMessageBox.warning(self, "Sem Dados", "Não há resultados para salvar!")
             return
         
         try:
-            # Prepara dados da inspeção (usa inspection_image, não current_image)
-            inspection_type = self.inspection_type_combo.currentText().lower()
+            # Obtém tipo de inspeção
+            inspection_type_text = self.inspection_type_combo.currentText()
+            inspection_type = "classification" if "Classificação" in inspection_type_text else "segmentation"
+            
+            # Prepara dados da inspeção
             inspection_data = {
                 "inspection_type": inspection_type,
                 "timestamp": datetime.now().isoformat(),
@@ -1070,7 +1615,15 @@ class MainWindow(QMainWindow):
             saved_path = self.core.save_inspection(inspection_data)
             
             if saved_path:
-                QMessageBox.information(self, "Salvo", f"Resultados salvos em:\n{saved_path}")
+                # Mostra diálogo com imagem anotada
+                dialog = DetectionDialog(
+                    self.inspection_image,
+                    self.current_results,
+                    inspection_type,
+                    parent=self
+                )
+                dialog.exec_()
+                
                 self.log_message(f"💾 Resultados salvos: {saved_path}")
                 self.load_history()  # Atualiza histórico
             else:
@@ -1079,6 +1632,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao salvar:\n{str(e)}")
             self.log_message(f"❌ Erro ao salvar: {e}")
+
     
     def clear_results(self):
         """Limpa resultados atuais"""
@@ -1112,52 +1666,177 @@ class MainWindow(QMainWindow):
         self.log_message("🧹 Resultados de inspeção limpos")
     
     def load_history(self):
-        """Carrega histórico de inspeções"""
-        # TODO: Implementar carregamento real do diretório de resultados
-        # Por enquanto, apenas uma demo
+        """Carrega histórico de inspeções salvas em disk"""
+        self.history_table.setRowCount(0)
         
-        self.history_table.setRowCount(3)  # Demo
+        try:
+            # Procura por diretórios de resultados
+            results_dir = self.core.results_dir
+            
+            if not results_dir.exists():
+                self.log_message("📁 Pasta de resultados não encontrada")
+                return
+            
+            # Lista todos os diretórios em results/
+            result_dirs = sorted(
+                [d for d in results_dir.iterdir() if d.is_dir()],
+                reverse=True  # Mais recentes primeiro
+            )
+            
+            if not result_dirs:
+                self.log_message("📋 Nenhuma inspeção salva ainda")
+                return
+            
+            # Preenche tabela com cada resultado
+            self.history_table.setRowCount(len(result_dirs))
+            
+            for row, result_dir in enumerate(result_dirs):
+                # Tenta carregar inspection_data.json
+                json_file = result_dir / "inspection_data.json"
+                
+                if not json_file.exists():
+                    continue
+                
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    # Extrai informações
+                    timestamp_str = data.get("timestamp", "N/A")
+                    inspection_type = data.get("inspection_type", "Desconhecido")
+                    results = data.get("results", {})
+                    
+                    # Formata timestamp para display
+                    try:
+                        dt = datetime.fromisoformat(timestamp_str)
+                        timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        timestamp_display = timestamp_str
+                    
+                    # Tipo de inspeção (maiúscula)
+                    type_display = "Classificação" if inspection_type == "classification" else "Segmentação"
+                    
+                    # Monta resultado text
+                    if inspection_type == "classification":
+                        status = results.get("status", "unknown")
+                        if status == "indeterminado":
+                            result_text = "🔶 INDETERMINADO"
+                        elif results.get("defects_detected"):
+                            result_text = "❌ RUIM"
+                        else:
+                            result_text = "✅ BOA"
+                        defect_count = "1" if results.get("defects_info") else "0"
+                    
+                    else:  # segmentation
+                        total_defects = results.get("total_defects", 0)
+                        if total_defects > 0:
+                            result_text = f"⚠️  {total_defects} defeito(s)"
+                        else:
+                            result_text = "✅ SEM DEFEITOS"
+                        defect_count = str(total_defects)
+                    
+                    # Preenche célula de data/hora
+                    self.history_table.setItem(row, 0, QTableWidgetItem(timestamp_display))
+                    
+                    # Preenche célula de tipo
+                    self.history_table.setItem(row, 1, QTableWidgetItem(type_display))
+                    
+                    # Preenche célula de resultado
+                    self.history_table.setItem(row, 2, QTableWidgetItem(result_text))
+                    
+                    # Preenche célula de defeitos
+                    self.history_table.setItem(row, 3, QTableWidgetItem(defect_count))
+                    
+                    # Botão de visualização
+                    view_btn = QPushButton("👁️ Ver")
+                    view_btn.clicked.connect(lambda checked, r=row, d=result_dir: self.view_history_item(r, d))
+                    self.history_table.setCellWidget(row, 4, view_btn)
+                
+                except Exception as e:
+                    log.debug(f"Erro ao carregar {json_file}: {e}")
+                    continue
+            
+            self.log_message(f"📋 Histórico carregado: {len(result_dirs)} inspeção(ões)")
         
-        # Linha 1
-        self.history_table.setItem(0, 0, QTableWidgetItem("2024-01-01 10:30:00"))
-        self.history_table.setItem(0, 1, QTableWidgetItem("Classificação"))
-        self.history_table.setItem(0, 2, QTableWidgetItem("✅ BOA"))
-        self.history_table.setItem(0, 3, QTableWidgetItem("0"))
-        
-        # Botão de ação
-        view_btn = QPushButton("👁️ Ver")
-        view_btn.clicked.connect(lambda: self.view_history_item(0))
-        self.history_table.setCellWidget(0, 4, view_btn)
-        
-        # Linha 2
-        self.history_table.setItem(1, 0, QTableWidgetItem("2024-01-01 10:31:00"))
-        self.history_table.setItem(1, 1, QTableWidgetItem("Segmentação"))
-        self.history_table.setItem(1, 2, QTableWidgetItem("⚠️  2 defeitos"))
-        self.history_table.setItem(1, 3, QTableWidgetItem("2"))
-        
-        view_btn2 = QPushButton("👁️ Ver")
-        view_btn2.clicked.connect(lambda: self.view_history_item(1))
-        self.history_table.setCellWidget(1, 4, view_btn2)
-        
-        # Linha 3
-        self.history_table.setItem(2, 0, QTableWidgetItem("2024-01-01 10:32:00"))
-        self.history_table.setItem(2, 1, QTableWidgetItem("Classificação"))
-        self.history_table.setItem(2, 2, QTableWidgetItem("❌ RUIM"))
-        self.history_table.setItem(2, 3, QTableWidgetItem("1"))
-        
-        view_btn3 = QPushButton("👁️ Ver")
-        view_btn3.clicked.connect(lambda: self.view_history_item(2))
-        self.history_table.setCellWidget(2, 4, view_btn3)
+        except Exception as e:
+            self.log_message(f"❌ Erro ao carregar histórico: {e}")
     
-    def view_history_item(self, row: int):
+    def view_history_item(self, row: int, result_dir: Path):
         """Visualiza item do histórico"""
-        QMessageBox.information(
-            self, 
-            "Visualizar", 
-            f"Visualizando item {row + 1}\n\n"
-            f"Em uma implementação real, esta função abriria\n"
-            f"os resultados salvos no disco."
-        )
+        try:
+            json_file = result_dir / "inspection_data.json"
+            
+            if not json_file.exists():
+                QMessageBox.warning(self, "Erro", "Arquivo de inspeção não encontrado")
+                return
+            
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Carrega imagem (se disponível)
+            image_data = data.get("image")
+            results = data.get("results", {})
+            inspection_type = data.get("inspection_type", "segmentation")
+            
+            # Se houver imagem, converte de volta para numpy
+            if isinstance(image_data, list):
+                image = np.array(image_data, dtype=np.uint8)
+            else:
+                image = None
+            
+            if image is not None:
+                # Mostra diálogo com detecções
+                dialog = DetectionDialog(image, results, inspection_type, parent=self)
+                dialog.exec_()
+            else:
+                # Apenas mostra resultados em mensagem
+                result_text = self._format_result_text(results, inspection_type)
+                QMessageBox.information(
+                    self,
+                    "Resultado da Inspeção",
+                    result_text
+                )
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao carregar inspeção:\n{str(e)}")
+            self.log_message(f"❌ Erro ao visualizar: {e}")
+    
+    def _format_result_text(self, results: dict, inspection_type: str) -> str:
+        """Formata texto com resultados da inspeção"""
+        if inspection_type == "classification":
+            status = results.get("status", "unknown")
+            defects_info = results.get("defects_info", [])
+            
+            if status == "indeterminado":
+                text = "🔶 CLASSIFICAÇÃO INDETERMINADA\n\n"
+                text += "Confiança abaixo do limite.\n"
+                text += "Recomenda-se nova captura."
+            elif results.get("defects_detected"):
+                text = "❌ FRUTA RUIM\n\n"
+                if defects_info:
+                    defect = defects_info[0]
+                    text += f"Classe: {defect.get('class', 'N/A')}\n"
+                    text += f"Confiança: {defect.get('confidence', 0):.1%}"
+            else:
+                text = "✅ FRUTA BOA\n\n"
+                if defects_info:
+                    defect = defects_info[0]
+                    text += f"Classe: {defect.get('class', 'N/A')}\n"
+                    text += f"Confiança: {defect.get('confidence', 0):.1%}"
+        
+        else:  # segmentation
+            total = results.get("total_defects", 0)
+            has_defects = results.get("has_defects", False)
+            
+            if has_defects:
+                text = f"⚠️  {total} DEFEITO(S) ENCONTRADO(S)\n\n"
+                defects = results.get("defects", [])
+                for defect in defects[:5]:  # Mostra até 5
+                    text += f"• {defect.get('class_name', 'N/A')}: {defect.get('confidence', 0):.1%}\n"
+            else:
+                text = "✅ NENHUM DEFEITO ENCONTRADO"
+        
+        return text
     
     def export_history(self):
         """Exporta histórico como CSV"""
@@ -1176,8 +1855,168 @@ class MainWindow(QMainWindow):
             self.update_camera_info()
             QMessageBox.information(self, "Recarregar", "Configuração da câmera recarregada")
             self.log_message("🔄 Câmera recarregada")
+            # Também recarrega parâmetros
+            QTimer.singleShot(200, self._reload_camera_parameters)
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao recarregar câmera:\n{str(e)}")
+    
+    def _reload_camera_parameters(self):
+        """Recarrega e exibe parâmetros da câmera ativa"""
+        try:
+            # Limpa widgets antigos
+            while self.camera_params_scroll_layout.count() > 0:
+                widget = self.camera_params_scroll_layout.takeAt(0)
+                if widget.widget():
+                    widget.widget().deleteLater()
+            
+            # Armazena widgets para callback
+            self.camera_param_widgets = {}
+            
+            # Obtém câmera ativa e seus parâmetros
+            camera_info = self.core.get_system_info().get("camera", {})
+            camera_type = camera_info.get("type", "unknown")
+            
+            # Obtém parâmetros da câmera
+            params = {}
+            try:
+                if hasattr(self.core.camera_manager, 'camera') and self.core.camera_manager.camera:
+                    params = self.core.camera_manager.camera.get_parameters()
+            except:
+                pass
+            
+            if not params:
+                info_label = QLabel(f"📷 Câmera: {camera_type.title()}\n\n✅ Nenhum parâmetro ajustável disponível")
+                info_label.setStyleSheet("color: #888; font-size: 12px;")
+                self.camera_params_scroll_layout.addWidget(info_label)
+                self.camera_params_info.setText("")
+            else:
+                # Cria widgets para cada parâmetro
+                for param_name, param_info in params.items():
+                    self._create_parameter_widget(param_name, param_info)
+                
+                # Info
+                param_count = len(params)
+                self.camera_params_info.setText(f"📷 {camera_type.title()} - {param_count} parâmetro(s) disponível(is)")
+            
+            self.camera_params_scroll_layout.addStretch()
+        
+        except Exception as e:
+            self.log_message(f"❌ Erro ao carregar parâmetros: {e}")
+    
+    def _create_parameter_widget(self, param_name: str, param_info: Dict[str, Any]):
+        """Cria widget para ajustar um parâmetro"""
+        try:
+            param_type = param_info.get("type", "float")
+            label_text = param_info.get("label", param_name)
+            description = param_info.get("description", "")
+            current_value = param_info.get("value", 0)
+            
+            # Container para o parâmetro
+            param_widget = QGroupBox(f"{label_text}")
+            param_layout = QVBoxLayout()
+            
+            # Descrição
+            if description:
+                desc_label = QLabel(description)
+                desc_label.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
+                param_layout.addWidget(desc_label)
+            
+            # Widget de controle (varia conforme tipo)
+            control_layout = QHBoxLayout()
+            
+            if param_type == "int":
+                spin = QSpinBox()
+                spin.setRange(int(param_info.get("min", 0)), int(param_info.get("max", 100)))
+                spin.setSingleStep(int(param_info.get("step", 1)))
+                spin.setValue(int(current_value))
+                spin.setMinimumWidth(100)
+                
+                # Conecta mudança
+                def on_int_changed(value, pname=param_name):
+                    self._on_camera_parameter_changed(pname, value)
+                
+                spin.valueChanged.connect(on_int_changed)
+                self.camera_param_widgets[param_name] = spin
+                
+                control_layout.addWidget(QLabel("Valor:"))
+                control_layout.addWidget(spin)
+                control_layout.addWidget(QLabel(""))  # Spacer
+            
+            elif param_type == "float":
+                spin = QDoubleSpinBox()
+                spin.setRange(float(param_info.get("min", 0)), float(param_info.get("max", 100)))
+                spin.setSingleStep(float(param_info.get("step", 0.1)))
+                spin.setValue(float(current_value))
+                spin.setMinimumWidth(100)
+                spin.setDecimals(2)
+                
+                def on_float_changed(value, pname=param_name):
+                    self._on_camera_parameter_changed(pname, value)
+                
+                spin.valueChanged.connect(on_float_changed)
+                self.camera_param_widgets[param_name] = spin
+                
+                control_layout.addWidget(QLabel("Valor:"))
+                control_layout.addWidget(spin)
+                control_layout.addWidget(QLabel(""))
+            
+            elif param_type == "bool":
+                check = QCheckBox("Habilitado")
+                check.setChecked(bool(current_value))
+                
+                def on_bool_changed(checked, pname=param_name):
+                    self._on_camera_parameter_changed(pname, checked)
+                
+                check.stateChanged.connect(on_bool_changed)
+                self.camera_param_widgets[param_name] = check
+                
+                control_layout.addWidget(check)
+                control_layout.addStretch()
+            
+            elif param_type == "enum":
+                combo = QComboBox()
+                options = param_info.get("options", [])
+                combo.addItems([str(o) for o in options])
+                
+                # Tenta selecionar valor atual
+                try:
+                    idx = options.index(current_value)
+                    combo.setCurrentIndex(idx)
+                except:
+                    pass
+                
+                def on_enum_changed(index, pname=param_name):
+                    self._on_camera_parameter_changed(pname, combo.currentText())
+                
+                combo.currentIndexChanged.connect(on_enum_changed)
+                self.camera_param_widgets[param_name] = combo
+                
+                control_layout.addWidget(QLabel("Opção:"))
+                control_layout.addWidget(combo)
+                control_layout.addStretch()
+            
+            param_layout.addLayout(control_layout)
+            param_widget.setLayout(param_layout)
+            
+            self.camera_params_scroll_layout.insertWidget(
+                self.camera_params_scroll_layout.count() - 1,
+                param_widget
+            )
+        
+        except Exception as e:
+            self.log_message(f"❌ Erro ao criar widget para {param_name}: {e}")
+    
+    def _on_camera_parameter_changed(self, param_name: str, value: Any):
+        """Callback quando um parâmetro da câmera é alterado"""
+        try:
+            if hasattr(self.core.camera_manager, 'camera') and self.core.camera_manager.camera:
+                success = self.core.camera_manager.camera.set_parameter(param_name, value)
+                if success:
+                    self.log_message(f"✅ {param_name} = {value}")
+                else:
+                    self.log_message(f"⚠️  Não foi possível ajustar {param_name}")
+        except Exception as e:
+            self.log_message(f"❌ Erro ao ajustar parâmetro: {e}")
     
     def reload_models(self):
         """Recarrega modelos ML"""
@@ -1241,24 +2080,37 @@ class MainWindow(QMainWindow):
         )
         
         if reply == QMessageBox.Yes:
-            # Limpa recursos
+            # Fecha popup de streaming se ativo
+            if hasattr(self, 'streaming_popup') and self.streaming_popup:
+                try:
+                    self.streaming_popup.close()
+                except Exception:
+                    pass
+                self.streaming_popup = None
+
+            # Para streaming se ativo (fallback)
+            if self.streaming_thread:
+                try:
+                    self.streaming_thread.stop()
+                except Exception:
+                    pass
+                self.streaming_thread = None
+
+            # Limpa timer se existir
             if hasattr(self, 'capture_timer'):
-                self.capture_timer.stop()
-            
-            # Esconde para tray se configurado
-            if DESKTOP_CONFIG["show_system_tray"]:
-                event.ignore()
-                self.hide()
-                self.tray_icon.showMessage(
-                    "Sistema de Inspeção",
-                    "Aplicação minimizada para bandeja",
-                    QSystemTrayIcon.Information,
-                    2000
-                )
-            else:
-                event.accept()
+                try:
+                    self.capture_timer.stop()
+                except Exception:
+                    pass
+
+            # Sempre encerra a aplicação ao fechar (não minimiza para bandeja)
+            try:
                 self.core.cleanup()
-                QApplication.quit()
+            except Exception:
+                pass
+
+            event.accept()
+            QApplication.quit()
         else:
             event.ignore()
 
@@ -1296,6 +2148,22 @@ def start_desktop_app(core: SystemCore = None):
         
         log.info("🖥️  Interface desktop inicializada")
         
+        # Registra handler para Ctrl+C (SIGINT) para encerrar a aplicação Qt
+        def _handle_sigint(sig, frame):
+            try:
+                log.info("🛑 SIGINT recebido. Enviando quit para QApplication...")
+                QTimer.singleShot(0, app.quit)
+            except Exception:
+                pass
+
+        signal.signal(signal.SIGINT, _handle_sigint)
+
+        # Garante que o core seja limpo quando a aplicação Qt for encerrada
+        try:
+            app.aboutToQuit.connect(lambda: core.cleanup())
+        except Exception:
+            pass
+
         # Executa aplicação
         return app.exec_()
     except Exception as e:

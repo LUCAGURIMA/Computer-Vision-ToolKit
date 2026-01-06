@@ -309,7 +309,7 @@ class SystemCore:
             finally:
                 self._capture_scheduler = None
     
-    def perform_segmentation(self, image: np.ndarray) -> Dict[str, Any]:
+    def perform_segmentation(self, image: np.ndarray, model_name: str = None) -> Dict[str, Any]:
         """
         Executa inspeção de SEGMENTAÇÃO (detecção de defeitos).
         
@@ -363,22 +363,38 @@ class SystemCore:
             # Notifica interface que começou
             self._notify("segmentation_started", {})
             
+            # Recarrega modelo se model_name foi especificado
+            if model_name:
+                self.segmentation_model.load_model(force_reload=True, model_name=model_name)
+            
             # Valida se modelo está carregado
             if self.segmentation_model is None or self.segmentation_model.model is None:
                 raise RuntimeError("Modelo de segmentação não carregado")
             
-            # Executa predição (YOLOv8 retorna detecções)
-            results = self.segmentation_model.predict(image)
+            # Obtém configurações do modelo
+            conf = self.segmentation_model.config.get('confidence_threshold', 0.5)
+            iou = self.segmentation_model.config.get('iou_threshold', 0.5)
+            imgsz = self.segmentation_model.config.get('image_size', 640)
+            
+            # Executa predição usando a API correta do ultralytics 8.0.0
+            # Passa a imagem numpy diretamente (não precisa salvar em arquivo)
+            results = self.segmentation_model.model.predict(
+                source=image,
+                conf=conf,
+                iou=iou,
+                imgsz=imgsz,
+                verbose=False
+            )
             
             # Processa resultados brutos do modelo
             defects = []
             for result in results:
                 if result.boxes is not None:
                     # Extrai cada detecção
-                    for box, conf, cls in zip(result.boxes.xyxy, result.boxes.conf, result.boxes.cls):
+                    for box, conf_score, cls in zip(result.boxes.xyxy, result.boxes.conf, result.boxes.cls):
                         defect = {
                             "bbox": box.tolist(),  # [x1, y1, x2, y2]
-                            "confidence": float(conf),  # 0.95
+                            "confidence": float(conf_score),  # 0.95
                             "class": int(cls),  # 0, 1, 2...
                             "class_name": self.segmentation_model.model.names[int(cls)] if hasattr(self.segmentation_model.model, "names") else str(cls)
                         }
@@ -412,7 +428,7 @@ class SystemCore:
                 "success": False
             }
     
-    def perform_classification(self, image: np.ndarray) -> Dict[str, Any]:
+    def perform_classification(self, image: np.ndarray, model_name: str = None) -> Dict[str, Any]:
         """
         Executa inspeção de CLASSIFICAÇÃO (BOM ou RUIM).
         
@@ -481,19 +497,32 @@ class SystemCore:
             # Notifica interface que começou
             self._notify("classification_started", {})
             
+            # Recarrega modelo se model_name foi especificado
+            if model_name:
+                self.classification_model.load_model(force_reload=True, model_name=model_name)
+            
             # Valida se modelo está carregado
             if self.classification_model is None or self.classification_model.model is None:
                 raise RuntimeError("Modelo de classificação não carregado")
             
-            # Executa predição (YOLOv8 classificação retorna probabilidades)
-            results = self.classification_model.predict(image)
+            # Obtém configurações do modelo
+            conf = self.classification_model.config.get('confidence_threshold', 0.7)
+            imgsz = self.classification_model.config.get('image_size', 640)
+            
+            # Executa predição usando a API correta do ultralytics 8.0.0
+            # Para classificação, passa task="classify"
+            results = self.classification_model.model.predict(
+                source=image,
+                imgsz=imgsz,
+                verbose=False
+            )
             
             # Processa resultados de classificação (diferente de detecção)
             defects_info = []
             
             for result in results:
                 # Classificação retorna atributo 'probs' em vez de 'boxes'
-                if hasattr(result, 'probs'):
+                if hasattr(result, 'probs') and result.probs is not None:
                     probs = result.probs
                     top1_idx = probs.top1  # Índice da classe com maior probabilidade
                     top1_conf = probs.top1conf.item()  # Confiança da classe vencedora

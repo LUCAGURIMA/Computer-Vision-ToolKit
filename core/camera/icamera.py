@@ -64,3 +64,38 @@ class ICamera(ABC):
             bool: True se disponível, False se não
         """
         pass
+    
+    def get_parameters(self) -> Dict[str, Any]:
+        """
+        Retorna parâmetros ajustáveis da câmera.
+        
+        Returns:
+            Dict[str, Any]: Dicionário de parâmetros
+                {
+                    "param_name": {
+                        "value": valor_atual,
+                        "type": "int|float|bool|enum",
+                        "label": "Nome amigável",
+                        "min": valor_min (opcional),
+                        "max": valor_max (opcional),
+                        "step": incremento (opcional),
+                        "options": [lista de opções] (opcional, para enum),
+                        "description": "Descrição do parâmetro"
+                    },
+                    ...
+                }
+        """
+        return {}  # Padrão: sem parâmetros ajustáveis
+    
+    def set_parameter(self, param_name: str, value: Any) -> bool:
+        """
+        Define um parâmetro da câmera.
+        
+        Args:
+            param_name (str): Nome do parâmetro
+            value (Any): Novo valor
+            
+        Returns:
+            bool: True se conseguiu ajustar, False caso contrário
+        """
+        return False  # Padrão: não suporta ajuste

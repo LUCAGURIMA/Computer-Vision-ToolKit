@@ -183,6 +183,112 @@ class BaslerCamera(ICamera):
     def is_available(self) -> bool:
         """Verifica se a câmera Basler está disponível"""
         return BASLER_AVAILABLE
+    
+    def get_parameters(self) -> Dict[str, Any]:
+        """Retorna parâmetros específicos da câmera Basler"""
+        if not self._initialized or not self._camera or not self._camera.IsOpen():
+            return {}
+        
+        try:
+            return {
+                "gain": {
+                    "value": float(self._camera.Gain.GetValue()) if hasattr(self._camera, 'Gain') else 0,
+                    "type": "float",
+                    "label": "Ganho",
+                    "min": 0,
+                    "max": 30,
+                    "step": 0.5,
+                    "description": "Ganho da câmera (0 a 30 dB)"
+                },
+                "exposure_time": {
+                    "value": float(self._camera.ExposureTime.GetValue()) if hasattr(self._camera, 'ExposureTime') else 0,
+                    "type": "float",
+                    "label": "Tempo de Exposição (µs)",
+                    "min": 26,
+                    "max": 30000000,
+                    "step": 1000,
+                    "description": "Tempo de exposição em microsegundos (26 µs a 30s)"
+                },
+                "frame_rate": {
+                    "value": float(self._camera.AcquisitionFrameRate.GetValue()) if hasattr(self._camera, 'AcquisitionFrameRate') else 30,
+                    "type": "float",
+                    "label": "Taxa de Quadros (FPS)",
+                    "min": 1,
+                    "max": 200,
+                    "step": 1,
+                    "description": "Taxa de aquisição em quadros por segundo"
+                },
+                "width": {
+                    "value": int(self._camera.Width.GetValue()),
+                    "type": "int",
+                    "label": "Largura",
+                    "min": 100,
+                    "max": 2048,
+                    "step": 4,
+                    "description": "Largura da imagem em pixels"
+                },
+                "height": {
+                    "value": int(self._camera.Height.GetValue()),
+                    "type": "int",
+                    "label": "Altura",
+                    "min": 100,
+                    "max": 2048,
+                    "step": 4,
+                    "description": "Altura da imagem em pixels"
+                },
+                "balance_white": {
+                    "value": "auto" if hasattr(self._camera, 'BalanceWhiteAuto') and self._camera.BalanceWhiteAuto.GetValue() == 1 else "manual",
+                    "type": "enum",
+                    "label": "Balanço de Branco",
+                    "options": ["manual", "auto"],
+                    "description": "Modo de balanço de branco"
+                }
+            }
+        except Exception as e:
+            log.debug(f"Erro ao ler parâmetros Basler: {e}")
+            return {}
+    
+    def set_parameter(self, param_name: str, value: Any) -> bool:
+        """Define parâmetro da câmera Basler"""
+        if not self._initialized or not self._camera or not self._camera.IsOpen():
+            return False
+        
+        try:
+            if param_name == "gain" and hasattr(self._camera, 'Gain'):
+                self._camera.Gain.SetValue(float(value))
+                log.info(f"📷 Basler: Ganho = {value} dB")
+                return True
+            
+            elif param_name == "exposure_time" and hasattr(self._camera, 'ExposureTime'):
+                self._camera.ExposureTime.SetValue(int(value))
+                log.info(f"📷 Basler: Tempo de exposição = {value} µs")
+                return True
+            
+            elif param_name == "frame_rate" and hasattr(self._camera, 'AcquisitionFrameRate'):
+                self._camera.AcquisitionFrameRate.SetValue(float(value))
+                log.info(f"📷 Basler: Taxa de quadros = {value} FPS")
+                return True
+            
+            elif param_name == "width" and hasattr(self._camera, 'Width'):
+                self._camera.Width.SetValue(int(value))
+                log.info(f"📷 Basler: Largura = {value} px")
+                return True
+            
+            elif param_name == "height" and hasattr(self._camera, 'Height'):
+                self._camera.Height.SetValue(int(value))
+                log.info(f"📷 Basler: Altura = {value} px")
+                return True
+            
+            elif param_name == "balance_white" and hasattr(self._camera, 'BalanceWhiteAuto'):
+                mode_val = 1 if str(value).lower() == "auto" else 0
+                self._camera.BalanceWhiteAuto.SetValue(mode_val)
+                log.info(f"📷 Basler: Balanço de branco = {value}")
+                return True
+            
+            return False
+        except Exception as e:
+            log.error(f"Erro ao ajustar Basler: {e}")
+            return False
 
 # Teste da implementação
 if __name__ == "__main__":

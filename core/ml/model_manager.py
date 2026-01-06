@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 from ultralytics import YOLO
 
 from core.utils.logger import log
-from config import MODELS_CONFIG, get_model_path
+from config import MODELS_CONFIG, get_model_path, get_available_models
 
 # ============================================
 # SOLUÇÃO PARA PYTORCH 2.6+ (weights_only)
@@ -81,30 +81,33 @@ class ModelManager:
             instance._initialized = False
         return cls._instances[model_type]
     
-    def __init__(self, model_type: str = "segmentation"):
+    def __init__(self, model_type: str = "segmentation", model_name: str = None):
         """
         Inicializa o gerenciador para um tipo específico de modelo.
         
         Args:
             model_type (str): "segmentation" ou "classification"
+            model_name (str): Nome do modelo sem .pt (usa default se None)
         """
         # Evita reinitialização no Singleton
         if hasattr(self, '_initialized') and self._initialized:
             return
         
         self.model_type = model_type
+        self.model_name = model_name  # Nome específico do modelo
         self.model = None
         self.config = MODELS_CONFIG.get(model_type, {})
         self._initialized = False
         
-        log.info(f"🤖 ModelManager criado para: {model_type}")
+        log.info(f"🤖 ModelManager criado para: {model_type}/{model_name or 'default'}")
     
-    def load_model(self, force_reload: bool = False) -> bool:
+    def load_model(self, force_reload: bool = False, model_name: str = None) -> bool:
         """
         Carrega o modelo YOLO com múltiplas estratégias de fallback.
         
         Args:
             force_reload (bool): Força recarregar mesmo se já carregado
+            model_name (str): Nome do modelo sem .pt (usa self.model_name ou default)
             
         Returns:
             bool: True se carregou com sucesso
@@ -115,11 +118,18 @@ class ModelManager:
             return True
         
         try:
+            # Determina nome do modelo
+            if model_name:
+                self.model_name = model_name
+            
             # Obtém caminho do modelo
-            model_path = self.config.get("path")
-            if not model_path or not Path(model_path).exists():
-                log.warning(f"Modelo {self.model_type} não encontrado em: {model_path}")
-                model_path = get_model_path(self.model_type)
+            model_path = get_model_path(self.model_type, self.model_name)
+            if not Path(model_path).exists():
+                log.warning(f"Modelo não encontrado: {model_path}")
+                # Tenta com modelo padrão
+                model_path = get_model_path(self.model_type, None)
+                if not Path(model_path).exists():
+                    raise FileNotFoundError(f"Nenhum modelo disponível para {self.model_type}")
             
             log.info(f"📂 Carregando modelo {self.model_type} de: {model_path}")
             
@@ -262,6 +272,19 @@ class ModelManager:
         cls._instances.clear()
         cls._models.clear()
         log.info("🗑️  Todos os modelos descarregados")
+    
+    @staticmethod
+    def get_available_models(model_type: str):
+        """
+        Lista modelos disponíveis para um tipo específico.
+        
+        Args:
+            model_type (str): "segmentation" ou "classification"
+            
+        Returns:
+            list: Lista de nomes de modelos (sem .pt)
+        """
+        return get_available_models(model_type)
 
 # Teste do ModelManager
 if __name__ == "__main__":
