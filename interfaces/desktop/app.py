@@ -33,6 +33,7 @@ import time
 
 from core.system_core import SystemCore
 from core.utils.logger import log
+from core.camera.camera_profiles import CameraProfileManager
 from config import DESKTOP_CONFIG, ASSETS_DIR, get_available_models
 
 # ============================================
@@ -446,6 +447,47 @@ class DetectionDialog(QDialog):
             qimage = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_Indexed8)
         
         return QPixmap.fromImage(qimage)
+
+class CreateProfileDialog(QDialog):
+    """Dialog para criar novo perfil de configuração de câmera"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Criar Novo Perfil")
+        self.setGeometry(200, 200, 400, 150)
+        self.setModal(True)
+        
+        layout = QVBoxLayout()
+        
+        # Label
+        label = QLabel("Nome do perfil:")
+        layout.addWidget(label)
+        
+        # Input
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Ex: Brilho Alta, Noturno, Externo...")
+        layout.addWidget(self.name_input)
+        
+        # Botões
+        btn_layout = QHBoxLayout()
+        
+        ok_btn = QPushButton("✅ Criar")
+        ok_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(ok_btn)
+        
+        cancel_btn = QPushButton("❌ Cancelar")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+        
+        # Foca no input
+        self.name_input.setFocus()
+    
+    def get_profile_name(self) -> str:
+        """Retorna nome digitado"""
+        return self.name_input.text().strip()
 
 class StreamingPopupWindow(QDialog):
     """Janela popup para streaming de vídeo em tempo real"""
@@ -1014,6 +1056,63 @@ class MainWindow(QMainWindow):
         
         # Carrega parâmetros iniciais
         QTimer.singleShot(500, self._reload_camera_parameters)
+        
+        # Grupo: Perfis de Câmera
+        profiles_group = QGroupBox("💾 Perfis de Configuração")
+        profiles_layout = QVBoxLayout()
+        
+        # Label informativo
+        profiles_info = QLabel("Salve e carregue perfis de configuração de câmera")
+        profiles_info.setStyleSheet("color: #888; font-size: 11px; font-style: italic;")
+        profiles_layout.addWidget(profiles_info)
+        
+        # Seleção de perfil existente
+        profile_select_layout = QHBoxLayout()
+        profile_select_layout.addWidget(QLabel("Perfil:"))
+        
+        self.profile_combo = QComboBox()
+        self.profile_combo.setMinimumWidth(200)
+        self.profile_combo.currentIndexChanged.connect(self._on_profile_selected)
+        profile_select_layout.addWidget(self.profile_combo)
+        
+        # Botão carregar
+        load_profile_btn = QPushButton("⬇️ Carregar")
+        load_profile_btn.clicked.connect(self._load_selected_profile)
+        profile_select_layout.addWidget(load_profile_btn)
+        
+        profiles_layout.addLayout(profile_select_layout)
+        
+        # Botões de ação
+        action_layout = QHBoxLayout()
+        
+        # Botão criar perfil
+        create_profile_btn = QPushButton("➕ Criar Perfil")
+        create_profile_btn.clicked.connect(self._create_new_profile)
+        action_layout.addWidget(create_profile_btn)
+        
+        # Botão salvar perfil (atualiza perfil selecionado com config atual)
+        save_profile_btn = QPushButton("💾 Salvar Perfil")
+        save_profile_btn.clicked.connect(self._save_current_profile)
+        action_layout.addWidget(save_profile_btn)
+        
+        # Botão deletar perfil
+        delete_profile_btn = QPushButton("🗑️ Deletar")
+        delete_profile_btn.clicked.connect(self._delete_selected_profile)
+        action_layout.addWidget(delete_profile_btn)
+        
+        # Botão recarregar lista de perfis
+        refresh_profiles_btn = QPushButton("🔄 Atualizar")
+        refresh_profiles_btn.clicked.connect(self._reload_profiles_list)
+        action_layout.addWidget(refresh_profiles_btn)
+        
+        profiles_layout.addLayout(action_layout)
+        
+        profiles_group.setLayout(profiles_layout)
+        layout.addWidget(profiles_group)
+        
+        # Inicializa gerenciador de perfis
+        self.profile_manager = CameraProfileManager()
+        self._reload_profiles_list()
         
         # Grupo: Modelos
         model_group = QGroupBox("Configurações dos Modelos")
@@ -2017,6 +2116,179 @@ class MainWindow(QMainWindow):
                     self.log_message(f"⚠️  Não foi possível ajustar {param_name}")
         except Exception as e:
             self.log_message(f"❌ Erro ao ajustar parâmetro: {e}")
+    
+    def _reload_profiles_list(self):
+        """Recarrega lista de perfis disponíveis"""
+        try:
+            # Obtém tipo de câmera ativa
+            camera_info = self.core.get_system_info().get("camera", {})
+            camera_type = camera_info.get("type", "unknown")
+            
+            # Lista perfis para este tipo de câmera
+            profiles = self.profile_manager.list_profiles(camera_type)
+            
+            # Atualiza combo
+            self.profile_combo.blockSignals(True)
+            self.profile_combo.clear()
+            
+            if profiles:
+                self.profile_combo.addItems(profiles)
+                self.profile_combo.insertItem(0, "-- Selecione um perfil --")
+                self.profile_combo.setCurrentIndex(0)
+            else:
+                self.profile_combo.addItem("-- Nenhum perfil --")
+            
+            self.profile_combo.blockSignals(False)
+            
+            self.log_message(f"✅ {len(profiles)} perfil(is) carregado(s)")
+        
+        except Exception as e:
+            self.log_message(f"❌ Erro ao recarregar perfis: {e}")
+    
+    def _on_profile_selected(self, index: int):
+        """Callback quando perfil é selecionado"""
+        # Apenas seleciona, não carrega automaticamente
+        pass
+    
+    def _create_new_profile(self):
+        """Abre dialog para criar novo perfil"""
+        try:
+            dialog = CreateProfileDialog(parent=self)
+            if dialog.exec_() == QDialog.Accepted:
+                profile_name = dialog.get_profile_name()
+                
+                if not profile_name:
+                    QMessageBox.warning(self, "Erro", "Nome do perfil não pode estar vazio")
+                    return
+                
+                if self.profile_manager.profile_exists(profile_name):
+                    QMessageBox.warning(self, "Erro", f"Perfil '{profile_name}' já existe")
+                    return
+                
+                # Obtém configuração atual
+                camera_info = self.core.get_system_info().get("camera", {})
+                camera_type = camera_info.get("type", "unknown")
+                
+                # Obtém parâmetros atuais
+                params = {}
+                try:
+                    if hasattr(self.core.camera_manager, 'camera') and self.core.camera_manager.camera:
+                        params = self.core.camera_manager.camera.get_parameters()
+                except:
+                    pass
+                
+                # Cria perfil
+                if self.profile_manager.create_profile(profile_name, camera_type, params):
+                    QMessageBox.information(self, "Sucesso", f"Perfil '{profile_name}' criado!")
+                    self.log_message(f"💾 Perfil criado: {profile_name}")
+                    self._reload_profiles_list()
+                else:
+                    QMessageBox.critical(self, "Erro", "Não foi possível criar o perfil")
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao criar perfil: {e}")
+    
+    def _load_selected_profile(self):
+        """Carrega o perfil selecionado"""
+        try:
+            profile_name = self.profile_combo.currentText()
+            
+            if not profile_name or profile_name.startswith("--"):
+                QMessageBox.warning(self, "Erro", "Selecione um perfil para carregar")
+                return
+            
+            # Carrega perfil
+            profile_data = self.profile_manager.load_profile(profile_name)
+            if not profile_data:
+                QMessageBox.critical(self, "Erro", f"Não foi possível carregar perfil '{profile_name}'")
+                return
+            
+            # Aplica parâmetros do perfil
+            params = profile_data.get("parameters", {})
+            
+            success_count = 0
+            for param_name, param_value in params.items():
+                try:
+                    if hasattr(self.core.camera_manager, 'camera') and self.core.camera_manager.camera:
+                        if self.core.camera_manager.camera.set_parameter(param_name, param_value):
+                            success_count += 1
+                except:
+                    pass
+            
+            # Recarrega UI
+            self._reload_camera_parameters()
+            
+            QMessageBox.information(
+                self, 
+                "Sucesso", 
+                f"Perfil '{profile_name}' carregado!\n{success_count} parâmetro(s) aplicado(s)"
+            )
+            self.log_message(f"⬇️ Perfil carregado: {profile_name}")
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao carregar perfil: {e}")
+    
+    def _save_current_profile(self):
+        """Salva configuração atual como novo perfil ou atualiza selecionado"""
+        try:
+            profile_name = self.profile_combo.currentText()
+            
+            if not profile_name or profile_name.startswith("--"):
+                # Abre dialog para criar novo
+                self._create_new_profile()
+                return
+            
+            # Obtém parâmetros atuais
+            camera_info = self.core.get_system_info().get("camera", {})
+            camera_type = camera_info.get("type", "unknown")
+            
+            params = {}
+            try:
+                if hasattr(self.core.camera_manager, 'camera') and self.core.camera_manager.camera:
+                    params = self.core.camera_manager.camera.get_parameters()
+            except:
+                pass
+            
+            # Deleta perfil antigo e cria novo com mesmo nome
+            self.profile_manager.delete_profile(profile_name)
+            
+            if self.profile_manager.create_profile(profile_name, camera_type, params):
+                QMessageBox.information(self, "Sucesso", f"Perfil '{profile_name}' salvo!")
+                self.log_message(f"💾 Perfil salvo: {profile_name}")
+            else:
+                QMessageBox.critical(self, "Erro", "Não foi possível salvar o perfil")
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao salvar perfil: {e}")
+    
+    def _delete_selected_profile(self):
+        """Deleta o perfil selecionado"""
+        try:
+            profile_name = self.profile_combo.currentText()
+            
+            if not profile_name or profile_name.startswith("--"):
+                QMessageBox.warning(self, "Erro", "Selecione um perfil para deletar")
+                return
+            
+            # Confirmação
+            reply = QMessageBox.question(
+                self,
+                "Confirmar Deleção",
+                f"Tem certeza que deseja deletar o perfil '{profile_name}'?\n\nEsta ação não pode ser desfeita.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if reply == QMessageBox.Yes:
+                if self.profile_manager.delete_profile(profile_name):
+                    QMessageBox.information(self, "Sucesso", f"Perfil '{profile_name}' deletado!")
+                    self.log_message(f"🗑️ Perfil deletado: {profile_name}")
+                    self._reload_profiles_list()
+                else:
+                    QMessageBox.critical(self, "Erro", "Não foi possível deletar o perfil")
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao deletar perfil: {e}")
     
     def reload_models(self):
         """Recarrega modelos ML"""
