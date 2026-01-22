@@ -183,13 +183,83 @@ class CameraManager:
         return {"status": "no_active_camera"}
     
     def get_all_cameras_info(self) -> List[Dict[str, Any]]:
-        """Informações de todas as câmeras"""
+        """Informações de todas as câmeras com status de conexão"""
         infos = []
         for i, camera in enumerate(self.cameras):
             info = camera.get_info()
             info["position"] = i
             info["is_active"] = (i == self._current_index)
+            # Tenta verificar se a câmera está realmente conectada
+            info["connected"] = camera._initialized if hasattr(camera, '_initialized') else False
             infos.append(info)
+        return infos
+    
+    def detect_all_cameras(self) -> List[Dict[str, Any]]:
+        """
+        Detecta status de TODAS as câmeras (não em cascata).
+        
+        Testa cada câmera individualmente para determinar:
+        - Se está disponível (conectável)
+        - Suas propriedades (resolução, modelo, etc)
+        
+        Returns:
+            List[Dict]: Informações de cada câmera com status de conexão
+        """
+        infos = []
+        
+        for i, camera in enumerate(self.cameras):
+            camera_info = {
+                "position": i,
+                "type": camera.__class__.__name__.replace("Camera", "").lower(),
+                "is_active": (i == self._current_index),
+                "connected": False,
+                "available": False
+            }
+            
+            try:
+                # Se câmera é mock, sempre está disponível
+                if camera.__class__.__name__ == "MockCamera":
+                    camera_info["available"] = True
+                    camera_info["connected"] = hasattr(camera, '_initialized') and camera._initialized
+                    if camera_info["connected"]:
+                        camera_info.update(camera.get_info())
+                    else:
+                        camera_info.update({
+                            "model": "Mock (Simulada)",
+                            "width": 640,
+                            "height": 480
+                        })
+                else:
+                    # Para câmeras reais, tenta detectar
+                    if hasattr(camera, '_initialized') and camera._initialized:
+                        # Já está inicializada
+                        camera_info["connected"] = True
+                        camera_info["available"] = True
+                        camera_info.update(camera.get_info())
+                    else:
+                        # Tenta testar disponibilidade sem inicializar
+                        # (cada câmera pode ter sua própria lógica)
+                        if hasattr(camera, 'test_connection'):
+                            if camera.test_connection():
+                                camera_info["available"] = True
+                        else:
+                            # Fallback: assume disponível para webcam
+                            if camera.__class__.__name__ == "WebcamCamera":
+                                camera_info["available"] = True
+                        
+                        # Se foi detectada, tenta pegar info básica
+                        if camera_info["available"]:
+                            try:
+                                camera_info.update(camera.get_info())
+                            except:
+                                pass
+            
+            except Exception as e:
+                log.debug(f"Erro ao detectar câmera {i}: {e}")
+                camera_info["available"] = False
+            
+            infos.append(camera_info)
+        
         return infos
     
     def release(self):

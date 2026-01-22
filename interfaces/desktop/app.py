@@ -35,6 +35,7 @@ from core.system_core import SystemCore
 from core.utils.logger import log
 from core.camera.camera_profiles import CameraProfileManager
 from config import DESKTOP_CONFIG, ASSETS_DIR, get_available_models
+from .managers import CaptureManager, InspectionManager, HistoryManager
 
 # ============================================
 # THREADS PARA OPERAÇÕES BLOQUEANTES
@@ -594,6 +595,20 @@ class MainWindow(QMainWindow):
     def __init__(self, core: SystemCore):
         super().__init__()
         self.core = core
+        
+        # ============ MANAGERS (separam lógica de UI) ============
+        self.capture_mgr = CaptureManager(core)
+        self.inspection_mgr = InspectionManager(core)
+        self.history_mgr = HistoryManager(core)
+        
+        # Conecta signals dos managers
+        self.capture_mgr.image_captured.connect(self.on_image_captured)
+        self.capture_mgr.error_occurred.connect(self.on_capture_error)
+        
+        self.inspection_mgr.inspection_completed.connect(self.on_inspection_completed)
+        self.inspection_mgr.error_occurred.connect(self.on_inspection_error)
+        
+        # ============ STATE (dados antigos - a manter por compatibilidade) ============
         # Aba de Captura: visualização apenas
         self.current_image = None
         self.raw_image = None
@@ -609,6 +624,10 @@ class MainWindow(QMainWindow):
         
         # Streaming thread (para captura contínua)
         self.streaming_thread = None
+        
+        # Elementos de configuração de câmera (criados em _create_settings_tab)
+        self.camera_status_label = None
+        self.camera_combo = None
         
         # Configurações da janela
         self.setWindowTitle(DESKTOP_CONFIG["window_title"])
@@ -1010,18 +1029,24 @@ class MainWindow(QMainWindow):
         camera_group = QGroupBox("Configurações da Câmera")
         camera_layout = QVBoxLayout()
         
-        # Seleção de câmera
-        cam_layout = QHBoxLayout()
-        cam_layout.addWidget(QLabel("Câmera:"))
+        # Info da câmera ativa (melhorado)
+        self.camera_status_label = QLabel("📷 Câmera: Não inicializada")
+        self.camera_status_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        camera_layout.addWidget(self.camera_status_label)
+        
+        # Seleção de câmera (dinâmica)
+        cam_select_layout = QHBoxLayout()
+        cam_select_layout.addWidget(QLabel("Trocar câmera:"))
         
         self.camera_combo = QComboBox()
-        self.camera_combo.addItems(["Basler (Automático)", "Webcam 0", "Webcam 1", "Mock"])
-        cam_layout.addWidget(self.camera_combo)
+        self.camera_combo.currentIndexChanged.connect(self._on_camera_combo_changed)
+        cam_select_layout.addWidget(self.camera_combo)
         
-        camera_layout.addLayout(cam_layout)
+        camera_layout.addLayout(cam_select_layout)
         
         # Botão recarregar câmera
-        reload_btn = QPushButton("🔄 Recarregar Câmera")
+        reload_btn = QPushButton("🔄 Recarregar")
+        reload_btn.setToolTip("Desconecta e reconecta à câmera\nAtualiza parâmetros")
         reload_btn.clicked.connect(self.reload_camera)
         camera_layout.addWidget(reload_btn)
         
@@ -1054,8 +1079,8 @@ class MainWindow(QMainWindow):
         self.camera_params_group.setLayout(self.camera_params_layout)
         layout.addWidget(self.camera_params_group)
         
-        # Carrega parâmetros iniciais
-        QTimer.singleShot(500, self._reload_camera_parameters)
+        # Carrega parâmetros iniciais (com delay para garantir inicialização)
+        QTimer.singleShot(1000, self._reload_camera_parameters)
         
         # Grupo: Perfis de Câmera
         profiles_group = QGroupBox("💾 Perfis de Configuração")
@@ -1225,6 +1250,9 @@ class MainWindow(QMainWindow):
         
         tab.setLayout(layout)
         self.tab_widget.addTab(tab, "⚙️ Configurações")
+        
+        # Carrega informações iniciais da câmera (com delay maior para garantir initialize)
+        QTimer.singleShot(2000, self.update_camera_info)
     
     def _create_system_tray(self):
         """Cria ícone na bandeja do sistema"""
@@ -1284,33 +1312,152 @@ class MainWindow(QMainWindow):
     # ========== MÉTODOS DE CONTROLE ==========
     
     def update_camera_info(self):
-        """Atualiza informações da câmera na UI"""
+        """Atualiza informações da câmera na UI com mais detalhes"""
         try:
+            # Guard: verifica se widgets foram criados
+            if not self.camera_status_label:
+                return
+            
             info = self.core.get_system_info()
             camera_info = info.get("camera", {})
             
-            camera_type = camera_info.get("type", "Desconhecida")
+            camera_type = camera_info.get("type", "Desconhecida").upper()
             status = "✅" if camera_info.get("initialized", False) else "❌"
             
-            self.camera_info_label.setText(
-                f"Câmera: {camera_type} {status}\n"
-                f"Resolução: {camera_info.get('width', '?')}x{camera_info.get('height', '?')}"
-            )
+            # Informações detalhadas
+            width = camera_info.get('width', '?')
+            height = camera_info.get('height', '?')
+            model = camera_info.get('model', '')
+            
+            # Monta string de status
+            status_text = f"📷 {camera_type} {status} "
+            if model:
+                status_text += f"({model}) "
+            status_text += f"\n{width}x{height}"
+            
+            self.camera_status_label.setText(status_text)
+            
+            # Atualiza combo com câmeras disponíveis APENAS se foi criado
+            if self.camera_combo:
+                self._update_camera_combo()
+            else:
+                log.debug("camera_combo ainda não foi criado")
             
         except Exception as e:
-            self.camera_info_label.setText(f"Câmera: Erro - {e}")
+            if self.camera_status_label:
+                self.camera_status_label.setText(f"❌ Erro: {str(e)[:30]}")
+            log.error(f"Erro ao atualizar info da câmera: {e}")
+    
+    def _update_camera_combo(self):
+        """Atualiza combo com lista de câmeras disponíveis"""
+        try:
+            # Guard: verifica se widget foi criado
+            if not self.camera_combo:
+                return
+            
+            cameras = self.core.get_available_cameras()
+            log.debug(f"_update_camera_combo: obtidos {len(cameras)} câmeras do core")
+            
+            self.camera_combo.blockSignals(True)
+            self.camera_combo.clear()
+            
+            current_active_index = None
+            
+            for cam_info in cameras:
+                cam_type = cam_info.get("type", "unknown").upper()
+                position = cam_info.get("position", 0)
+                is_active = cam_info.get("is_active", False)
+                available = cam_info.get("available", False)
+                connected = cam_info.get("connected", False)
+                
+                # Monta label com indicações visuais
+                status_icon = ""
+                if is_active:
+                    status_icon = "✅"  # Ativa
+                elif connected:
+                    status_icon = "🔗"  # Conectada mas não ativa
+                elif available:
+                    status_icon = "⚪"  # Disponível mas não conectada
+                else:
+                    status_icon = "❌"  # Não disponível
+                
+                label = f"{cam_type} #{position} {status_icon}"
+                
+                self.camera_combo.addItem(label, userData=position)
+                log.debug(f"  Adicionado item ao combo: {label}")
+                
+                # Marca índice da câmera ativa
+                if is_active:
+                    current_active_index = self.camera_combo.count() - 1
+            
+            # Define índice da câmera ativa
+            if current_active_index is not None:
+                self.camera_combo.setCurrentIndex(current_active_index)
+            
+            self.camera_combo.blockSignals(False)
+            log.debug(f"_update_camera_combo completado com {self.camera_combo.count()} itens")
+            
+        except Exception as e:
+            log.error(f"Erro ao atualizar combo: {e}")
+    
+    def _on_camera_combo_changed(self, index: int):
+        """Callback quando câmera é selecionada no combo"""
+        if index < 0:
+            return
+        
+        try:
+            camera_index = self.camera_combo.itemData(index)
+            
+            if camera_index is None:
+                return
+            
+            current_cameras = self.core.get_available_cameras()
+            current_active = next((c for c in current_cameras if c.get("is_active")), None)
+            
+            if current_active and current_active.get("position") == camera_index:
+                # Já está ativa, não faz nada
+                return
+            
+            # Alterna para câmera
+            self.log_message(f"🔄 Alternando para câmera {camera_index}...")
+            
+            if self.core.switch_camera(camera_index):
+                self.log_message(f"✅ Câmera alternada com sucesso")
+                # Pequeno delay para câmera inicializar
+                QTimer.singleShot(500, self._after_camera_switch)
+            else:
+                self.log_message(f"❌ Falha ao alternar câmera (não está disponível)")
+                # Reverte combo para câmera ativa anterior
+                QTimer.singleShot(100, self._update_camera_combo)
+        
+        except Exception as e:
+            self.log_message(f"❌ Erro ao alternar câmera: {e}")
+            log.error(f"Erro em _on_camera_combo_changed: {e}")
+    
+    def _after_camera_switch(self):
+        """Callback após alternar câmera"""
+        try:
+            self.update_camera_info()
+            # Recarrega parâmetros
+            QTimer.singleShot(200, self._reload_camera_parameters)
+        except Exception as e:
+            log.error(f"Erro em _after_camera_switch: {e}")
+    
+
 
     def _on_crop_toggled(self, state: int):
         """Habilita/desabilita crop automático"""
         self.crop_enabled = bool(state)
+        self.capture_mgr.set_crop_settings(self.crop_enabled, self.crop_bbox)
         self.crop_info_label.setText(f"Crop: {'ativo' if self.crop_enabled else 'inativo'}")
         self.log_message(f"⚙️ Crop automático {'ativado' if self.crop_enabled else 'desativado'}")
 
     def _reset_crop(self):
         """Reseta configuração de crop (desabilita e limpa bbox)"""
         self.crop_bbox = None
-        self.crop_check.setChecked(False)
         self.crop_enabled = False
+        self.capture_mgr.reset_crop()
+        self.crop_check.setChecked(False)
         self.crop_info_label.setText("Crop: nenhum")
         self.log_message("✂️ Crop resetado")
 
@@ -1324,7 +1471,7 @@ class MainWindow(QMainWindow):
     def _open_crop_editor(self):
         """Abre diálogo para selecionar região de crop usando a imagem atual"""
         # Preferir imagem RAW (não processada) para seleção do crop
-        img_for_edit = self.raw_image if self.raw_image is not None else self.current_image
+        img_for_edit = self.capture_mgr.get_raw_image() if self.capture_mgr.get_raw_image() is not None else self.capture_mgr.get_current_image()
         if img_for_edit is None:
             QMessageBox.warning(self, "Sem Imagem", "Capture uma imagem para editar o crop")
             return
@@ -1332,6 +1479,7 @@ class MainWindow(QMainWindow):
         dlg = CropDialog(img_for_edit, parent=self)
         if dlg.exec_() == QDialog.Accepted and dlg.bbox:
             self.crop_bbox = dlg.bbox
+            self.capture_mgr.set_crop_settings(self.crop_enabled, self.crop_bbox)
             self.crop_info_label.setText(f"Crop: {self.crop_bbox}")
             self.log_message(f"✂️ Crop definido: {self.crop_bbox}")
 
@@ -1370,6 +1518,7 @@ class MainWindow(QMainWindow):
         
         # Cria e inicia thread de captura
         self.capture_thread = CaptureThread(self.core)
+        self.capture_thread.image_captured.connect(self.capture_mgr.process_captured_image)
         self.capture_thread.image_captured.connect(self.on_image_captured)
         self.capture_thread.error_occurred.connect(self.on_capture_error)
         self.capture_thread.start()
@@ -1379,25 +1528,16 @@ class MainWindow(QMainWindow):
         """Slot chamado quando imagem é capturada"""
         self.capture_btn.setEnabled(True)
         self.status_label.setText("🟢 Pronto")
-        # Guarda imagem raw e aplica pré-processamento somente para exibição/inspeção
-        raw = result.get("image")
-        self.raw_image = raw
-
-        image = raw
-        if self.crop_enabled and self.crop_bbox:
-            try:
-                ops = [{"name": "crop", "bbox": self.crop_bbox}]
-                image = self.core.preprocess_image(raw, ops)
-            except Exception as e:
-                self.log_message(f"❌ Falha ao aplicar crop: {e}")
-
-        self.current_image = image
         
-        # Atualiza UI
+        # Atualiza state local (compatibilidade)
+        self.raw_image = result.get("raw_image")
+        self.current_image = result.get("image")
+        
+        # Exibe imagem
         self.display_image(self.current_image)
         
         # Mostra informações
-        shape = self.current_image.shape if self.current_image is not None else "N/A"
+        shape = result.get("shape", "N/A")
         self.image_info_label.setText(
             f"Resolução: {shape} | "
             f"Câmera: {result.get('camera_info', {}).get('type', 'N/A')} | "
@@ -1405,13 +1545,14 @@ class MainWindow(QMainWindow):
         )
         
         self.log_message(f"✅ Imagem capturada: {shape}")
+        
         # Se solicitamos inspeção após a captura, inicia agora
-        if getattr(self, '_inspect_after_capture', None):
+        if self.capture_mgr.should_inspect_after_capture():
             try:
-                inspection_type = self._inspect_after_capture
+                inspection_type = self.capture_mgr.should_inspect_after_capture()
                 ui_text = "Segmentação" if inspection_type == "segmentation" else "Classificação"
                 # limpa flag antes de iniciar para evitar loops
-                self._inspect_after_capture = None
+                self.capture_mgr.set_inspect_after_capture(None)
                 QTimer.singleShot(50, lambda: self._start_inspection(inspection_type, ui_text))
             except Exception as e:
                 self.log_message(f"❌ Falha ao iniciar inspeção após captura: {e}")
@@ -1430,16 +1571,20 @@ class MainWindow(QMainWindow):
         if image is None:
             return
         
-        # Converte BGR (OpenCV) para RGB
-        if len(image.shape) == 3 and image.shape[2] == 3:
-            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        else:
-            image_rgb = image
+        # Converte para RGB usando o manager
+        image_rgb = self.capture_mgr.get_image_for_display(image)
+        if image_rgb is None:
+            return
         
         # Cria QImage
-        h, w, ch = image_rgb.shape
-        bytes_per_line = ch * w
-        qimage = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        h, w = image_rgb.shape[:2]
+        if len(image_rgb.shape) == 3:
+            ch = image_rgb.shape[2]
+            bytes_per_line = ch * w
+            qimage = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        else:
+            bytes_per_line = w
+            qimage = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_Grayscale8)
         
         # Cria QPixmap e exibe
         pixmap = QPixmap.fromImage(qimage)
@@ -1948,16 +2093,51 @@ class MainWindow(QMainWindow):
         )
     
     def reload_camera(self):
-        """Recarrega configuração da câmera"""
+        """
+        Desconecta e reconecta a câmera ativa.
+        
+        Isso serve para:
+        1. Reestabelecer conexão se câmera ficou instável
+        2. Recarregar configurações/parâmetros
+        3. Sincronizar estado da UI com câmera real
+        """
         try:
-            # TODO: Implementar recarregamento real
-            self.update_camera_info()
-            QMessageBox.information(self, "Recarregar", "Configuração da câmera recarregada")
-            self.log_message("🔄 Câmera recarregada")
-            # Também recarrega parâmetros
-            QTimer.singleShot(200, self._reload_camera_parameters)
+            self.log_message("🔄 Desconectando câmera...")
+            
+            # Obtém índice da câmera ativa
+            current_index = self.core.camera_manager._current_index if self.core.camera_manager else -1
+            
+            if current_index < 0:
+                self.log_message("⚠️  Nenhuma câmera ativa para recarregar")
+                return
+            
+            # Libera câmera atual
+            if self.core.camera_manager and self.core.camera_manager.active_camera:
+                try:
+                    self.core.camera_manager.active_camera.release()
+                except:
+                    pass
+            
+            self.log_message("⏳ Reconectando câmera...")
+            
+            # Tenta reconectar à mesma câmera
+            if self.core.camera_manager.cameras[current_index].initialize():
+                self.core.camera_manager.active_camera = self.core.camera_manager.cameras[current_index]
+                self.log_message("✅ Câmera reconectada com sucesso")
+                
+                # Atualiza UI
+                QTimer.singleShot(300, self.update_camera_info)
+                
+                # Recarrega parâmetros
+                QTimer.singleShot(500, self._reload_camera_parameters)
+            else:
+                self.log_message("❌ Falha ao reconectar câmera")
+                # Atualiza combo para mostrar status
+                QTimer.singleShot(100, self._update_camera_combo)
+        
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Falha ao recarregar câmera:\n{str(e)}")
+            self.log_message(f"❌ Erro ao recarregar câmera: {e}")
+            log.error(f"Erro em reload_camera: {e}")
     
     def _reload_camera_parameters(self):
         """Recarrega e exibe parâmetros da câmera ativa"""
@@ -1975,19 +2155,42 @@ class MainWindow(QMainWindow):
             camera_info = self.core.get_system_info().get("camera", {})
             camera_type = camera_info.get("type", "unknown")
             
-            # Obtém parâmetros da câmera
-            params = {}
-            try:
-                if hasattr(self.core.camera_manager, 'camera') and self.core.camera_manager.camera:
-                    params = self.core.camera_manager.camera.get_parameters()
-            except:
-                pass
+            log.debug(f"Camera info: {camera_info}")
+            log.debug(f"Core camera_manager exists: {hasattr(self.core, 'camera_manager')}")
             
-            if not params:
-                info_label = QLabel(f"📷 Câmera: {camera_type.title()}\n\n✅ Nenhum parâmetro ajustável disponível")
+            # Obtém parâmetros da câmera - usa active_camera do manager
+            params = {}
+            camera_obj = None
+            
+            # Verifica se camera_manager foi inicializado
+            if not hasattr(self.core, 'camera_manager') or self.core.camera_manager is None:
+                log.warning("Camera manager não foi inicializado ainda")
+                info_label = QLabel(f"📷 Câmera: {camera_type.title()}\n\n⏳ Câmera ainda está sendo inicializada...\nTente recarregar em alguns segundos.")
                 info_label.setStyleSheet("color: #888; font-size: 12px;")
                 self.camera_params_scroll_layout.addWidget(info_label)
-                self.camera_params_info.setText("")
+                self.camera_params_info.setText(f"📷 {camera_type.title()} - inicializando...")
+                return
+            
+            # CameraManager tem active_camera
+            camera_obj = self.core.camera_manager.active_camera
+            log.debug(f"Active camera: {camera_obj}")
+            
+            # Tenta obter parâmetros
+            if camera_obj:
+                try:
+                    params = camera_obj.get_parameters()
+                    log.debug(f"Parâmetros obtidos: {list(params.keys())}")
+                except Exception as e:
+                    log.error(f"Erro ao obter parâmetros: {e}")
+                    params = {}
+            else:
+                log.warning(f"Nenhuma câmera encontrada para obter parâmetros")
+            
+            if not params:
+                info_label = QLabel(f"📷 Câmera: {camera_type.title()}\n\n✅ Nenhum parâmetro ajustável disponível ou câmera não inicializada")
+                info_label.setStyleSheet("color: #888; font-size: 12px;")
+                self.camera_params_scroll_layout.addWidget(info_label)
+                self.camera_params_info.setText(f"📷 {camera_type.title()} - sem parâmetros")
             else:
                 # Cria widgets para cada parâmetro
                 for param_name, param_info in params.items():
@@ -2000,6 +2203,7 @@ class MainWindow(QMainWindow):
             self.camera_params_scroll_layout.addStretch()
         
         except Exception as e:
+            log.error(f"Erro ao carregar parâmetros: {e}")
             self.log_message(f"❌ Erro ao carregar parâmetros: {e}")
     
     def _create_parameter_widget(self, param_name: str, param_info: Dict[str, Any]):
@@ -2108,12 +2312,20 @@ class MainWindow(QMainWindow):
     def _on_camera_parameter_changed(self, param_name: str, value: Any):
         """Callback quando um parâmetro da câmera é alterado"""
         try:
-            if hasattr(self.core.camera_manager, 'camera') and self.core.camera_manager.camera:
-                success = self.core.camera_manager.camera.set_parameter(param_name, value)
+            camera_obj = None
+            
+            # Obtém câmera ativa via manager
+            if hasattr(self.core, 'camera_manager') and self.core.camera_manager:
+                camera_obj = self.core.camera_manager.active_camera
+            
+            if camera_obj:
+                success = camera_obj.set_parameter(param_name, value)
                 if success:
                     self.log_message(f"✅ {param_name} = {value}")
                 else:
                     self.log_message(f"⚠️  Não foi possível ajustar {param_name}")
+            else:
+                self.log_message(f"⚠️  Câmera não disponível para ajuste")
         except Exception as e:
             self.log_message(f"❌ Erro ao ajustar parâmetro: {e}")
     
@@ -2172,10 +2384,17 @@ class MainWindow(QMainWindow):
                 # Obtém parâmetros atuais
                 params = {}
                 try:
-                    if hasattr(self.core.camera_manager, 'camera') and self.core.camera_manager.camera:
-                        params = self.core.camera_manager.camera.get_parameters()
-                except:
-                    pass
+                    camera_obj = None
+                    if hasattr(self.core, 'camera_manager'):
+                        if hasattr(self.core.camera_manager, 'camera'):
+                            camera_obj = self.core.camera_manager.camera
+                        elif hasattr(self.core.camera_manager, 'current_camera'):
+                            camera_obj = self.core.camera_manager.current_camera
+                    
+                    if camera_obj:
+                        params = camera_obj.get_parameters()
+                except Exception as e:
+                    log.warning(f"Aviso ao obter parâmetros para perfil: {e}")
                 
                 # Cria perfil
                 if self.profile_manager.create_profile(profile_name, camera_type, params):
@@ -2207,13 +2426,23 @@ class MainWindow(QMainWindow):
             params = profile_data.get("parameters", {})
             
             success_count = 0
-            for param_name, param_value in params.items():
-                try:
-                    if hasattr(self.core.camera_manager, 'camera') and self.core.camera_manager.camera:
-                        if self.core.camera_manager.camera.set_parameter(param_name, param_value):
+            camera_obj = None
+            
+            # Obtém câmera
+            if hasattr(self.core, 'camera_manager'):
+                if hasattr(self.core.camera_manager, 'camera'):
+                    camera_obj = self.core.camera_manager.camera
+                elif hasattr(self.core.camera_manager, 'current_camera'):
+                    camera_obj = self.core.camera_manager.current_camera
+            
+            # Aplica parâmetros
+            if camera_obj:
+                for param_name, param_value in params.items():
+                    try:
+                        if camera_obj.set_parameter(param_name, param_value):
                             success_count += 1
-                except:
-                    pass
+                    except Exception as e:
+                        log.debug(f"Erro ao aplicar {param_name}: {e}")
             
             # Recarrega UI
             self._reload_camera_parameters()
@@ -2244,10 +2473,15 @@ class MainWindow(QMainWindow):
             
             params = {}
             try:
-                if hasattr(self.core.camera_manager, 'camera') and self.core.camera_manager.camera:
-                    params = self.core.camera_manager.camera.get_parameters()
-            except:
-                pass
+                # Obtém câmera ativa via manager
+                camera_obj = None
+                if hasattr(self.core, 'camera_manager') and self.core.camera_manager:
+                    camera_obj = self.core.camera_manager.active_camera
+                
+                if camera_obj:
+                    params = camera_obj.get_parameters()
+            except Exception as e:
+                log.warning(f"Aviso ao obter parâmetros para salvar: {e}")
             
             # Deleta perfil antigo e cria novo com mesmo nome
             self.profile_manager.delete_profile(profile_name)

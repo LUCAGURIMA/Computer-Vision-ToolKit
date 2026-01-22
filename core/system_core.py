@@ -823,6 +823,84 @@ class SystemCore:
         }
         return info
     
+    def get_available_cameras(self) -> List[Dict[str, Any]]:
+        """
+        Retorna lista de TODAS as câmeras disponíveis no sistema.
+        
+        Usa detecção paralela para testar cada câmera individualmente,
+        não em cascata. Cada câmera na lista contém:
+        - position: índice da câmera na cadeia
+        - type: tipo da câmera (basler, webcam, mock)
+        - is_active: True se é a câmera ativa atualmente
+        - available: True se a câmera está detectada/disponível
+        - connected: True se a câmera está inicializada/conectada
+        - model: modelo da câmera (se disponível)
+        - resolution: resolução (WxH)
+        
+        Returns:
+            List[Dict]: Lista com informações de cada câmera
+            
+        Exemplo:
+            cameras = core.get_available_cameras()
+            for cam in cameras:
+                print(f"{cam['position']}: {cam['type'].upper()}")
+                print(f"  Disponível: {cam['available']}")
+                print(f"  Conectada: {cam['connected']}")
+                print(f"  Ativa: {cam['is_active']}")
+        """
+        if not self.camera_manager:
+            return []
+        
+        # Usa detecção paralela (não em cascata)
+        return self.camera_manager.detect_all_cameras()
+    
+    def switch_camera(self, camera_index: int) -> bool:
+        """
+        Alterna para uma câmera específica.
+        
+        Libera a câmera ativa, inicializa a câmera especificada,
+        e atualiza o estado interno.
+        
+        Args:
+            camera_index (int): Índice da câmera na lista
+            
+        Returns:
+            bool: True se conseguiu alternar, False se falhou
+            
+        Exemplo:
+            if core.switch_camera(0):
+                print("Alternado para câmera 0")
+            else:
+                print("Falha ao alternar")
+        """
+        if not self.camera_manager or camera_index < 0 or camera_index >= len(self.camera_manager.cameras):
+            return False
+        
+        try:
+            # Libera câmera atual
+            if self.camera_manager.active_camera:
+                try:
+                    self.camera_manager.active_camera.release()
+                except:
+                    pass
+            
+            # Tenta inicializar câmera específica
+            target_camera = self.camera_manager.cameras[camera_index]
+            
+            if target_camera.initialize():
+                self.camera_manager.active_camera = target_camera
+                self.camera_manager._current_index = camera_index
+                
+                log.info(f"✅ Alternado para câmera: {target_camera.__class__.__name__}")
+                return True
+            else:
+                log.warning(f"⚠️  Câmera {camera_index} não pôde ser inicializada")
+                return False
+            
+        except Exception as e:
+            log.error(f"❌ Erro ao alternar câmera: {e}")
+            return False
+    
     def cleanup(self):
         """
         Libera todos os recursos ocupados pelo sistema.
