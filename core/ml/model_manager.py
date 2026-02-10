@@ -5,7 +5,7 @@ Carrega e gerencia os modelos YOLO para segmentação e classificação.
 Implementa Singleton pattern para carregar cada modelo apenas uma vez.
 """
 
-import torch
+# import torch  # Movido para dentro das funções para evitar erro de DLL na inicialização
 from pathlib import Path
 from typing import Dict, Any, Optional
 from ultralytics import YOLO
@@ -20,35 +20,42 @@ from config import MODELS_CONFIG, get_model_path, get_available_models
 # Modelos YOLO antigos podem não funcionar
 # Solução: monkeypatch torch.load + permitir globals da ultralytics
 
-_original_torch_load = torch.load
-
-def _patched_torch_load(f, *args, **kwargs):
-    """Wrapper para torch.load que usa weights_only=False por padrão"""
-    # Se weights_only não foi especificado, usa False para compatibilidade
-    if 'weights_only' not in kwargs:
-        kwargs['weights_only'] = False
-    return _original_torch_load(f, *args, **kwargs)
-
-# Aplica o monkeypatch globalmente
-torch.load = _patched_torch_load
-
-# Adiciona safe globals para ultralytics (permite desserializar modelos antigos)
 try:
-    import ultralytics.nn as nn_module
-    # Permite todos os módulos públicos do ultralytics.nn
-    for name in dir(nn_module):
-        if not name.startswith('_'):
-            try:
-                obj = getattr(nn_module, name)
-                if isinstance(obj, type):  # É uma classe
-                    torch.serialization.add_safe_globals([obj])
-            except:
-                pass
-    log.debug("✅ Safe globals para ultralytics.nn adicionados")
-except Exception as e:
-    log.debug(f"⚠️  Não foi possível adicionar safe globals: {e}")
-
-log.debug("🔧 Monkeypatch aplicado: torch.load usa weights_only=False para compatibilidade")
+    import torch
+    
+    _original_torch_load = torch.load
+    
+    def _patched_torch_load(f, *args, **kwargs):
+        """Wrapper para torch.load que usa weights_only=False por padrão"""
+        # Se weights_only não foi especificado, usa False para compatibilidade
+        if 'weights_only' not in kwargs:
+            kwargs['weights_only'] = False
+        return _original_torch_load(f, *args, **kwargs)
+    
+    # Aplica o monkeypatch globalmente
+    torch.load = _patched_torch_load
+    
+    # Adiciona safe globals para ultralytics (permite desserializar modelos antigos)
+    try:
+        import ultralytics.nn as nn_module
+        # Permite todos os módulos públicos do ultralytics.nn
+        for name in dir(nn_module):
+            if not name.startswith('_'):
+                try:
+                    obj = getattr(nn_module, name)
+                    if isinstance(obj, type):  # É uma classe
+                        torch.serialization.add_safe_globals([obj])
+                except:
+                    pass
+        log.debug("✅ Safe globals para ultralytics.nn adicionados")
+    except Exception as e:
+        log.debug(f"⚠️  Não foi possível adicionar safe globals: {e}")
+    
+    log.debug("🔧 Monkeypatch aplicado: torch.load usa weights_only=False para compatibilidade")
+    
+except ImportError:
+    log.warning("⚠️  PyTorch não disponível - modelos ML não funcionarão")
+    torch = None
 
 class ModelManager:
     """
@@ -248,9 +255,13 @@ class ModelManager:
         self._initialized = False
         
         # Limpa cache CUDA se disponível
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            log.debug("🧹 Cache CUDA limpo")
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                log.debug("🧹 Cache CUDA limpo")
+        except ImportError:
+            pass
         
         log.info(f"🗑️  Modelo {self.model_type} descarregado")
     

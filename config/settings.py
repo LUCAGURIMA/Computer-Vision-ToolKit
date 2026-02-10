@@ -27,12 +27,6 @@ for directory in [MODELS_DIR, LOGS_DIR, DATA_DIR, ASSETS_DIR]:
 # CONFIGURAÇÕES DA CÂMERA
 # ============================================
 CAMERA_CONFIG = {
-    "primary": {
-        "type": "basler",           # basler, webcam, mock
-        "ip": None,                 # IP específico (None para auto)
-        "timeout": 5000,            # timeout em ms
-        "max_retries": 3,           # tentativas antes de fallback
-    },
     "fallbacks": [
         {
             "type": "webcam",

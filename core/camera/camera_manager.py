@@ -45,12 +45,13 @@ class CameraManager:
     def _create_camera_chain(self):
         """Cria a cadeia de câmeras baseada na configuração"""
         
-        # 1. Câmera principal (Basler)
-        primary_config = self.config["primary"]
-        if primary_config["type"] == "basler":
-            camera = BaslerCamera(ip_address=primary_config.get("ip"))
-            self.cameras.append(camera)
-            log.info(f"➕ Adicionada câmera principal: Basler")
+        # 1. Câmera principal (Basler) - se existir
+        if "primary" in self.config:
+            primary_config = self.config["primary"]
+            if primary_config["type"] == "basler":
+                camera = BaslerCamera(ip_address=primary_config.get("ip"))
+                self.cameras.append(camera)
+                log.info(f"➕ Adicionada câmera principal: Basler")
         
         # 2. Câmeras de fallback
         for i, fb_config in enumerate(self.config.get("fallbacks", [])):
@@ -75,7 +76,7 @@ class CameraManager:
         Returns:
             bool: True se alguma câmera inicializou
         """
-        max_retries = self.config["primary"].get("max_retries", 3)
+        max_retries = self.config.get("primary", {}).get("max_retries", 3)
         
         for i, camera in enumerate(self.cameras):
             log.info(f"🔄 Tentando inicializar câmera {i+1}/{len(self.cameras)}: {camera.__class__.__name__}")

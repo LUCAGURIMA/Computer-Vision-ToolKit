@@ -15,7 +15,7 @@ import numpy as np
 import cv2
 
 from core.camera import CameraManager
-from core.ml.model_manager import ModelManager
+# from core.ml.model_manager import ModelManager  # Movido para dentro das funções
 from core.utils.logger import log
 from config import SYSTEM_CONFIG, DATA_DIR
 from core.image_processing.image_pipeline import ImagePipeline
@@ -179,6 +179,14 @@ class SystemCore:
         """
         log.info("🤖 Carregando modelos ML...")
         
+        # Importa ModelManager apenas quando necessário
+        try:
+            from core.ml.model_manager import ModelManager
+        except Exception as e:
+            log.error(f"❌ Não foi possível importar ModelManager: {e}")
+            log.warning("⚠️  Sistema continuará sem modelos ML")
+            return
+        
         # Carrega modelo de segmentação (detecta defeitos)
         self.segmentation_model = ModelManager.get_instance("segmentation")
         if not self.segmentation_model.load_model():
@@ -189,6 +197,87 @@ class SystemCore:
         self.classification_model = ModelManager.get_instance("classification")
         if not self.classification_model.load_model():
             log.warning("⚠️  Não foi possível carregar modelo de classificação")
+    
+    def update_model_configs(self, segmentation_threshold: float = None, classification_threshold: float = None) -> bool:
+        """
+        Atualiza as configurações dos modelos ML.
+        
+        Args:
+            segmentation_threshold (float): Novo threshold para segmentação (0.0-1.0)
+            classification_threshold (float): Novo threshold para classificação (0.0-1.0)
+            
+        Returns:
+            bool: True se atualizou com sucesso
+        """
+        log.debug(f"update_model_configs chamado com seg_thresh={segmentation_threshold}, class_thresh={classification_threshold}")
+        
+        try:
+            updated = False
+            
+            if segmentation_threshold is not None and self.segmentation_model:
+                old_threshold = self.segmentation_model.config.get('confidence_threshold', 0.5)
+                self.segmentation_model.config['confidence_threshold'] = segmentation_threshold
+                log.info(f"🔧 Threshold de segmentação atualizado: {old_threshold:.3f} → {segmentation_threshold:.3f}")
+                updated = True
+            
+            if classification_threshold is not None and self.classification_model:
+                old_threshold = self.classification_model.config.get('confidence_threshold', 0.7)
+                self.classification_model.config['confidence_threshold'] = classification_threshold
+                log.info(f"🔧 Threshold de classificação atualizado: {old_threshold:.3f} → {classification_threshold:.3f}")
+                updated = True
+            
+            if updated:
+                log.info("✅ Configurações dos modelos atualizadas")
+                return True
+            else:
+                log.warning("⚠️  Nenhum modelo disponível para atualização")
+                return False
+                
+        except Exception as e:
+            log.error(f"❌ Erro ao atualizar configurações dos modelos: {e}")
+            return False
+    
+    def reload_models(self, force_reload: bool = False) -> bool:
+        """
+        Recarrega os modelos ML do disco.
+        
+        Args:
+            force_reload (bool): Força recarregar mesmo se já carregados
+            
+        Returns:
+            bool: True se recarregou com sucesso
+        """
+        try:
+            log.info("🔄 Recarregando modelos ML...")
+            
+            success_count = 0
+            
+            # Recarrega modelo de segmentação
+            if self.segmentation_model:
+                if self.segmentation_model.load_model(force_reload=force_reload):
+                    log.info("✅ Modelo de segmentação recarregado")
+                    success_count += 1
+                else:
+                    log.warning("⚠️  Falha ao recarregar modelo de segmentação")
+            
+            # Recarrega modelo de classificação
+            if self.classification_model:
+                if self.classification_model.load_model(force_reload=force_reload):
+                    log.info("✅ Modelo de classificação recarregado")
+                    success_count += 1
+                else:
+                    log.warning("⚠️  Falha ao recarregar modelo de classificação")
+            
+            if success_count > 0:
+                log.info(f"✅ {success_count} modelo(s) recarregado(s) com sucesso")
+                return True
+            else:
+                log.warning("⚠️  Nenhum modelo foi recarregado")
+                return False
+                
+        except Exception as e:
+            log.error(f"❌ Erro ao recarregar modelos: {e}")
+            return False
     
     def capture_image(self) -> Optional[Dict[str, Any]]:
         """
@@ -873,19 +962,29 @@ class SystemCore:
             else:
                 print("Falha ao alternar")
         """
-        if not self.camera_manager or camera_index < 0 or camera_index >= len(self.camera_manager.cameras):
+        log.debug(f"switch_camera chamado com camera_index={camera_index}")
+        
+        if not self.camera_manager:
+            log.debug("camera_manager não existe")
+            return False
+            
+        if camera_index < 0 or camera_index >= len(self.camera_manager.cameras):
+            log.debug(f"camera_index inválido: {camera_index}, total câmeras: {len(self.camera_manager.cameras)}")
             return False
         
         try:
+            log.debug("Liberando câmera atual...")
             # Libera câmera atual
             if self.camera_manager.active_camera:
                 try:
                     self.camera_manager.active_camera.release()
-                except:
-                    pass
+                    log.debug("Câmera atual liberada")
+                except Exception as e:
+                    log.debug(f"Erro ao liberar câmera atual: {e}")
             
             # Tenta inicializar câmera específica
             target_camera = self.camera_manager.cameras[camera_index]
+            log.debug(f"Tentando inicializar câmera {camera_index}: {target_camera.__class__.__name__}")
             
             if target_camera.initialize():
                 self.camera_manager.active_camera = target_camera
@@ -934,7 +1033,11 @@ class SystemCore:
             self.camera_manager.release()
         
         # Descarrega modelos (libera GPU/VRAM)
-        ModelManager.unload_all()
+        try:
+            from core.ml.model_manager import ModelManager
+            ModelManager.unload_all()
+        except ImportError:
+            log.debug("ModelManager não disponível para unload")
         
         log.info("✅ SystemCore limpo")
 
