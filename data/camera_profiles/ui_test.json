@@ -1,0 +1,15 @@
+{
+  "name": "ui_test",
+  "camera_type": "basler",
+  "parameters": {
+    "Gain": "10",
+    "ExposureTime": "12345",
+    "name": "ui_test",
+    "format": "pfs",
+    "metadata": {},
+    "file_info": {},
+    "converted_at": "2026-03-03T09:29:52.402468"
+  },
+  "created_at": "C:\\Users\\adm_luca.goulart\\Desktop\\Usseewa\\data",
+  "timestamp": "2026-03-03T09:29:52.402468"
+}

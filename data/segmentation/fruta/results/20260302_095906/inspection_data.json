@@ -1,0 +1,24 @@
+{
+  "inspection_type": "segmentation",
+  "timestamp": "2026-03-02T09:59:06.289340",
+  "results": {
+    "defects": [
+      {
+        "bbox": [
+          332.91448974609375,
+          305.86492919921875,
+          359.33978271484375,
+          362.88812255859375
+        ],
+        "confidence": 0.5851036906242371,
+        "class": 0,
+        "class_name": "impureza"
+      }
+    ],
+    "has_defects": true,
+    "total_defects": 1,
+    "confidence_threshold": 0.45,
+    "success": true
+  },
+  "image_file": "20260302_095906\\image.jpg"
+}

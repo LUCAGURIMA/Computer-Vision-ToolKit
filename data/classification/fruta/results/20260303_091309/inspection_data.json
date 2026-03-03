@@ -1,0 +1,18 @@
+{
+  "inspection_type": "classification",
+  "timestamp": "2026-03-03T09:13:09.790434",
+  "results": {
+    "defects_info": [
+      {
+        "class": "INDETERMINADO",
+        "status": "rejected"
+      }
+    ],
+    "defects_detected": null,
+    "confidence": 0.5236886143684387,
+    "confidence_threshold": 0.7,
+    "status": "indeterminado",
+    "success": true
+  },
+  "image_file": "20260303_091309\\image.jpg"
+}

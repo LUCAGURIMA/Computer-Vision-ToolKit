@@ -1,0 +1,14 @@
+{
+  "name": "pfs_apply",
+  "camera_type": "basler",
+  "parameters": {
+    "Gain": "3",
+    "name": "pfs_apply",
+    "format": "pfs",
+    "metadata": {},
+    "file_info": {},
+    "converted_at": "2026-03-02T14:48:02.991527"
+  },
+  "created_at": "C:\\Users\\adm_luca.goulart\\Desktop\\Usseewa\\data",
+  "timestamp": "2026-03-02T14:48:02.991527"
+}
