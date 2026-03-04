@@ -223,7 +223,7 @@ class InspectionResultsPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         self.info_label = QLabel('Aguardando resultado da inspeção...')
-        self.info_label.setStyleSheet('font-weight: bold; font-size: 12px; padding: 8px; background-color: #2a2a2a;')
+        self.info_label.setStyleSheet('font-weight: bold; font-size: 16px; padding: 8px; background-color: #2a2a2a;')
         self.info_label.setMaximumHeight(30)
         layout.addWidget(self.info_label, 0)
         self.scroll_area = QScrollArea()
@@ -305,22 +305,22 @@ class InspectionResultsPanel(QWidget):
             has_defects = self.result.get('has_defects', False)
             if has_defects:
                 info_text = f' {total_defects} DEFEITO(S) ENCONTRADO(S)'
-                self.info_label.setStyleSheet('color: orange; font-weight: bold; font-size: 12px; padding: 10px;')
+                self.info_label.setStyleSheet('color: orange; font-weight: bold; font-size: 16px; padding: 10px;')
             else:
                 info_text = ' NENHUM DEFEITO ENCONTRADO'
-                self.info_label.setStyleSheet('color: green; font-weight: bold; font-size: 12px; padding: 10px;')
+                self.info_label.setStyleSheet('color: green; font-weight: bold; font-size: 16px; padding: 10px;')
         elif self.inspection_type == 'classification':
             status = self.result.get('status', 'unknown')
             defects_detected = self.result.get('defects_detected', False)
             if status == 'indeterminado':
                 info_text = ' INDETERMINADO'
-                self.info_label.setStyleSheet('color: orange; font-weight: bold; font-size: 12px; padding: 10px;')
+                self.info_label.setStyleSheet('color: orange; font-weight: bold; font-size: 16px; padding: 10px;')
             elif defects_detected:
                 info_text = ' FRUTA RUIM'
-                self.info_label.setStyleSheet('color: red; font-weight: bold; font-size: 12px; padding: 10px;')
+                self.info_label.setStyleSheet('color: red; font-weight: bold; font-size: 16px; padding: 10px;')
             else:
                 info_text = ' FRUTA BOA'
-                self.info_label.setStyleSheet('color: green; font-weight: bold; font-size: 12px; padding: 10px;')
+                self.info_label.setStyleSheet('color: green; font-weight: bold; font-size: 16px; padding: 10px;')
         self.info_label.setText(info_text)
 
     def _draw_detections(self) -> np.ndarray:
@@ -483,7 +483,7 @@ class DetectionDialog(QDialog):
                 info_text = ' FRUTA BOA'
                 info_color = 'green'
         label = QLabel(info_text)
-        label.setStyleSheet(f'color: {info_color}; font-weight: bold; font-size: 14px;')
+        label.setStyleSheet(f'color: {info_color}; font-weight: bold; font-size: 18px;')
         layout.addWidget(label)
         layout.addStretch()
 
@@ -665,7 +665,7 @@ class MainWindow(QMainWindow):
     def _apply_theme(self):
         theme = DESKTOP_CONFIG['theme']
         if theme == 'dark':
-            self.setStyleSheet('\n\n                QMainWindow {\n\n                    background-color: #2b2b2b;\n\n                    color: #ffffff;\n\n                }\n\n                QPushButton {\n\n                    background-color: #3c3c3c;\n\n                    color: white;\n\n                    border: 1px solid #555;\n\n                    padding: 8px;\n\n                    border-radius: 4px;\n\n                }\n\n                QPushButton:hover {\n\n                    background-color: #4a4a4a;\n\n                }\n\n                QPushButton:pressed {\n\n                    background-color: #2a2a2a;\n\n                }\n\n                QLabel {\n\n                    color: #ffffff;\n\n                }\n\n                QTextEdit, QTableWidget {\n\n                    background-color: #1e1e1e;\n\n                    color: #ffffff;\n\n                    border: 1px solid #555;\n\n                }\n\n                QTabWidget::pane {\n\n                    border: 1px solid #555;\n\n                    background-color: #2b2b2b;\n\n                }\n\n                QTabBar::tab {\n\n                    background-color: #3c3c3c;\n\n                    color: white;\n\n                    padding: 8px;\n\n                    margin-right: 2px;\n\n                }\n\n                QTabBar::tab:selected {\n\n                    background-color: #4a4a4a;\n\n                }\n\n                QGroupBox {\n\n                    border: 2px solid #555;\n\n                    border-radius: 5px;\n\n                    margin-top: 10px;\n\n                    padding-top: 10px;\n\n                    color: #ffffff;\n\n                }\n\n                QGroupBox::title {\n\n                    subcontrol-origin: margin;\n\n                    left: 10px;\n\n                    padding: 0 5px 0 5px;\n\n                }\n\n            ')
+            self.setStyleSheet('\n\n                QMainWindow {\n\n                    background-color: #2b2b2b;\n\n                    color: #ffffff;\n\n                }\n\n                QPushButton {\n\n                    background-color: #3c3c3c;\n\n                    color: white;\n\n                    border: 1px solid #555;\n\n                    padding: 8px;\n\n                    border-radius: 4px;\n\n                }\n\n                QPushButton:hover {\n\n                    background-color: #4a4a4a;\n\n                }\n\n                QPushButton:pressed {\n\n                    background-color: #2a2a2a;\n\n                }\n\n                QLabel {\n\n                    color: #ffffff;\n\n                }\n\n                QTextEdit, QTableWidget {\n\n                    background-color: #1e1e1e;\n\n                    color: #ffffff;\n\n                    border: 1px solid #555;\n\n                }\n\n                QTabWidget::pane {\n\n                    border: 1px solid #555;\n\n                    background-color: #2b2b2b;\n\n                }\n\n                QTabBar::tab {\n\n                    background-color: #3c3c3c;\n\n                    color: white;\n\n                    padding: 8px;\n\n                    margin-right: 2px;\n\n                }\n\n                QTabBar::tab:selected {\n\n                    background-color: #4a4a4a;\n\n                }\n\n                QGroupBox {\n\n                    border: 2px solid #555;\n\n                    border-radius: 5px;\n\n                    margin-top: 10px;\n\n                    padding-top: 10px;\n\n                    color: #ffffff;\n\n                }\n\n                QGroupBox::title {\n\n                    subcontrol-origin: margin;\n\n                    left: 10px;\n\n                    padding: 0 5px 0 5px;\n\n                }\n\n                QGroupBox::indicator {\n\n                    width: 18px;\n\n                    height: 18px;\n\n                    background-color: #1a1a1a;\n\n                    border: 2px solid #888;\n\n                    border-radius: 3px;\n\n                }\n\n                QGroupBox::indicator:checked {\n\n                    background-color: #0d47a1;\n\n                    border: 2px solid #0d47a1;\n\n                    image: url(data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%2218%22%20height=%2218%22%20viewBox=%220%200%2018%2018%22%3E%3Cline%20x1=%224%22%20y1=%224%22%20x2=%2214%22%20y2=%2214%22%20stroke=%22white%22%20stroke-width=%222%22/%3E%3Cline%20x1=%2214%22%20y1=%224%22%20x2=%224%22%20y2=%2214%22%20stroke=%22white%22%20stroke-width=%222%22/%3E%3C/svg%3E);\n\n                }\n\n            ')
         elif theme == 'light':
             pass
 
@@ -677,7 +677,7 @@ class MainWindow(QMainWindow):
         top_bar = QHBoxLayout()
         title_label = QLabel('SISTEMA DE INSPEÇÃO HÍBRIDO')
         title_font = QFont()
-        title_font.setPointSize(14)
+        title_font.setPointSize(18)
         title_font.setBold(True)
         title_label.setFont(title_font)
         top_bar.addWidget(title_label)
@@ -719,7 +719,8 @@ class MainWindow(QMainWindow):
         self.capture_btn.setToolTip("Captura uma única imagem da câmera.\n\nO que faz:\n• Conecta à câmera (com fallback automático)\n• Captura 1 frame em alta qualidade\n• Aplica crop automático (se habilitado)\n• Exibe imagem neste painel\n\nUso:\n1. Posicione o produto\n2. Clique para capturar\n3. Vá para aba 'Inspeção' para analisar\n\n Para preview contínuo:\nclique em 'Captura Contínua'")
         btn_layout.addWidget(self.capture_btn)
         self.capture_continuous_btn = QPushButton(' Abrir Streaming')
-        self.capture_continuous_btn.clicked.connect(lambda: self.toggle_continuous_capture(True))
+        self.capture_continuous_btn.setCheckable(True)
+        self.capture_continuous_btn.clicked.connect(self.toggle_continuous_capture)
         self.capture_continuous_btn.setToolTip('Ativa streaming em tempo real (30 FPS).\n\nO que faz:\n• Thread separada captura a cada 30ms\n• Mostra preview contínuo da câmera\n• Exibe FPS em tempo real\n• Sem travamento da interface\n\nUso:\n• Clique para iniciar streaming\n• Clique novamente para parar\n• Veja o FPS no canto inferior\n\n Perfeito para posicionar o produto')
         btn_layout.addWidget(self.capture_continuous_btn)
         capture_layout.addLayout(btn_layout)
@@ -895,7 +896,6 @@ class MainWindow(QMainWindow):
         self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.history_table.setMinimumHeight(300)
         self.history_result_dirs = []
-        self.history_table.cellDoubleClicked.connect(self._history_row_double_clicked)
         layout.addWidget(self.history_table, 1)
         btn_layout = QHBoxLayout()
         refresh_btn = QPushButton(' Atualizar')
@@ -913,7 +913,7 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout()
         title = QLabel(' Gerenciamento de Perfis Basler (.pfs)')
-        title.setFont(QFont('Arial', 14, QFont.Bold))
+        title.setFont(QFont('Arial', 18, QFont.Bold))
         layout.addWidget(title)
         controls_group = QGroupBox('Controles')
         controls_layout = QHBoxLayout()
@@ -968,12 +968,12 @@ class MainWindow(QMainWindow):
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_widget = QWidget()
-        scroll_widget.setStyleSheet('\n\n            QWidget {\n\n                background-color: #2b2b2b;\n\n                color: #ffffff;\n\n            }\n\n            QGroupBox {\n\n                border: 2px solid #555;\n\n                border-radius: 5px;\n\n                margin-top: 10px;\n\n                padding-top: 10px;\n\n                color: #ffffff;\n\n                font-weight: bold;\n\n            }\n\n            QGroupBox::title {\n\n                subcontrol-origin: margin;\n\n                left: 10px;\n\n                padding: 0 5px 0 5px;\n\n                color: #ffffff;\n\n            }\n\n            QLabel {\n\n                color: #ffffff;\n\n            }\n\n            QPushButton {\n\n                background-color: #3c3c3c;\n\n                color: white;\n\n                border: 1px solid #555;\n\n                padding: 8px;\n\n                border-radius: 4px;\n\n            }\n\n            QPushButton:hover {\n\n                background-color: #4a4a4a;\n\n            }\n\n            QPushButton:pressed {\n\n                background-color: #2a2a2a;\n\n            }\n\n            QComboBox {\n\n                background-color: #3c3c3c;\n\n                color: white;\n\n                border: 1px solid #555;\n\n                padding: 4px;\n\n                border-radius: 2px;\n\n                min-height: 24px;\n\n                min-width: 100px;\n\n            }\n\n            QComboBox:hover {\n\n                border: 1px solid #777;\n\n                background-color: #4a4a4a;\n\n            }\n\n            QComboBox:focus {\n\n                border: 2px solid #0d47a1;\n\n                background-color: #454545;\n\n            }\n\n            QComboBox::drop-down {\n\n                border: none;\n\n                width: 30px;\n\n                background-color: transparent;\n\n            }\n\n            /* use default Qt down-arrow icon */\n\n            QComboBox::down-arrow {\n\n                /* no custom styling */\n\n            }\n\n            QComboBox:on {\n\n                background-color: #454545;\n\n                border: 2px solid #0d47a1;\n\n            }\n\n            QComboBox QAbstractItemView {\n\n                background-color: #3c3c3c;\n\n                color: white;\n\n                border: 1px solid #555;\n\n                selection-background-color: #0d47a1;\n\n                selection-color: white;\n\n            }\n\n            QComboBox QAbstractItemView::item:hover {\n\n                background-color: #505050;\n\n            }\n\n            QComboBox QAbstractItemView::item:selected {\n\n                background-color: #0d47a1;\n\n            }\n\n            QSpinBox, QDoubleSpinBox {\n\n                background-color: #3c3c3c;\n\n                color: white;\n\n                border: 1px solid #555;\n\n                padding: 4px;\n\n                border-radius: 2px;\n\n            }\n\n            QCheckBox {\n\n                color: #ffffff;\n\n            }\n\n            QCheckBox::indicator {\n\n                width: 16px;\n\n                height: 16px;\n\n                background-color: #3c3c3c;\n\n                border: 1px solid #555;\n\n                border-radius: 2px;\n\n            }\n\n            QCheckBox::indicator:checked {\n\n                background-color: #4a4a4a;\n\n            }\n\n            QLineEdit {\n\n                background-color: #3c3c3c;\n\n                color: white;\n\n                border: 1px solid #555;\n\n                padding: 4px;\n\n                border-radius: 2px;\n\n            }\n\n        ')
+        scroll_widget.setStyleSheet('\n\n            QWidget {\n\n                background-color: #2b2b2b;\n\n                color: #ffffff;\n\n            }\n\n            QGroupBox {\n\n                border: 2px solid #555;\n\n                border-radius: 5px;\n\n                margin-top: 10px;\n\n                padding-top: 10px;\n\n                color: #ffffff;\n\n                font-weight: bold;\n\n            }\n\n            QGroupBox::title {\n\n                subcontrol-origin: margin;\n\n                left: 10px;\n\n                padding: 0 5px 0 5px;\n\n                color: #ffffff;\n\n            }\n\n            QGroupBox::indicator {\n\n                width: 18px;\n\n                height: 18px;\n\n                background-color: #1a1a1a;\n\n                border: 2px solid #888;\n\n                border-radius: 3px;\n\n            }\n\n            QGroupBox::indicator:hover {\n\n                border: 2px solid #aaa;\n\n            }\n\n            QGroupBox::indicator:checked {\n\n                background-color: #0d47a1;\n\n                border: 2px solid #0d47a1;\n\n                image: url(data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2024%2024%22%3E%3Cline%20x1=%224%22%20y1=%2412%22%20x2=%2210%22%20y2=%2218%22%20stroke=%22white%22%20stroke-width=%222%22/%3E%3Cline%20x1=%2210%22%20y1=%2218%22%20x2=%2220%22%20y2=%228%22%20stroke=%22white%22%20stroke-width=%222%22/%3E%3C/svg%3E);\n\n            }\n\n            QLabel {\n\n                color: #ffffff;\n\n            }\n\n            QPushButton {\n\n                background-color: #3c3c3c;\n\n                color: white;\n\n                border: 1px solid #555;\n\n                padding: 8px;\n\n                border-radius: 4px;\n\n            }\n\n            QPushButton:hover {\n\n                background-color: #4a4a4a;\n\n            }\n\n            QPushButton:pressed {\n\n                background-color: #2a2a2a;\n\n            }\n\n            QComboBox {\n\n                background-color: #3c3c3c;\n\n                color: white;\n\n                border: 1px solid #555;\n\n                padding: 4px;\n\n                border-radius: 2px;\n\n                min-height: 24px;\n\n                min-width: 100px;\n\n            }\n\n            QComboBox:hover {\n\n                border: 1px solid #777;\n\n                background-color: #4a4a4a;\n\n            }\n\n            QComboBox:focus {\n\n                border: 2px solid #0d47a1;\n\n                background-color: #454545;\n\n            }\n\n            QComboBox::drop-down {\n\n                border: none;\n\n                width: 30px;\n\n                background-color: transparent;\n\n            }\n\n            /* use default Qt down-arrow icon */\n\n            QComboBox::down-arrow {\n\n                /* no custom styling */\n\n            }\n\n            QComboBox:on {\n\n                background-color: #454545;\n\n                border: 2px solid #0d47a1;\n\n            }\n\n            QComboBox QAbstractItemView {\n\n                background-color: #3c3c3c;\n\n                color: white;\n\n                border: 1px solid #555;\n\n                selection-background-color: #0d47a1;\n\n                selection-color: white;\n\n            }\n\n            QComboBox QAbstractItemView::item:hover {\n\n                background-color: #505050;\n\n            }\n\n            QComboBox QAbstractItemView::item:selected {\n\n                background-color: #0d47a1;\n\n            }\n\n            QSpinBox, QDoubleSpinBox {\n\n                background-color: #3c3c3c;\n\n                color: white;\n\n                border: 1px solid #555;\n\n                padding: 4px;\n\n                border-radius: 2px;\n\n            }\n\n            QCheckBox {\n\n                color: #ffffff;\n\n            }\n\n            QCheckBox::indicator {\n\n                width: 16px;\n\n                height: 16px;\n\n                background-color: #3c3c3c;\n\n                border: 1px solid #555;\n\n                border-radius: 2px;\n\n            }\n\n            QCheckBox::indicator:checked {\n\n                background-color: #4a4a4a;\n\n            }\n\n            QLineEdit {\n\n                background-color: #3c3c3c;\n\n                color: white;\n\n                border: 1px solid #555;\n\n                padding: 4px;\n\n                border-radius: 2px;\n\n            }\n\n        ')
         layout = QVBoxLayout(scroll_widget)
         camera_group = QGroupBox('Configurações da Câmera')
         camera_layout = QVBoxLayout()
         self.camera_status_label = QLabel(' Câmera: Não inicializada')
-        self.camera_status_label.setStyleSheet('font-weight: bold; font-size: 12px;')
+        self.camera_status_label.setStyleSheet('font-weight: bold; font-size: 16px;')
         camera_layout.addWidget(self.camera_status_label)
         cam_select_layout = QHBoxLayout()
         cam_select_layout.addWidget(QLabel('Trocar câmera:'))
@@ -1473,7 +1473,7 @@ class MainWindow(QMainWindow):
             log.debug(f'Erro ao exibir frame: {e}')
 
     def _on_streaming_fps(self, fps: float):
-        self.info_label.setText(f'FPS: {fps:.1f} | Resolução: --')
+        self.image_info_label.setText(f'FPS: {fps:.1f} | Resolução: --')
 
     def _on_streaming_error(self, error_msg: str):
         QMessageBox.warning(self, 'Erro no Streaming', f'Erro: {error_msg}')
@@ -1483,10 +1483,12 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self.streaming_thread = None
-        self.capture_continuous_btn.setEnabled(True)
+        self.capture_continuous_btn.blockSignals(True)
+        self.capture_continuous_btn.setChecked(False)
+        self.capture_continuous_btn.blockSignals(False)
         self.log_message(' Streaming interrompido devido a erro')
 
-    def toggle_continuous_capture(self, checked: bool):
+    def toggle_continuous_capture(self):
         use_popup = DESKTOP_CONFIG.get('stream_in_popup', True)
         if not use_popup:
             if hasattr(self, 'streaming_thread') and self.streaming_thread:
@@ -1495,7 +1497,9 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self.streaming_thread = None
-                self.capture_continuous_btn.setEnabled(True)
+                self.capture_continuous_btn.blockSignals(True)
+                self.capture_continuous_btn.setChecked(False)
+                self.capture_continuous_btn.blockSignals(False)
                 self.log_message(' Streaming interrompido')
                 return
             self.streaming_thread = StreamingThread(self.core, target_fps=30)
@@ -1503,17 +1507,17 @@ class MainWindow(QMainWindow):
             self.streaming_thread.fps_info.connect(self._on_streaming_fps)
             self.streaming_thread.error_occurred.connect(self._on_streaming_error)
             self.streaming_thread.start()
-            self.capture_continuous_btn.setEnabled(False)
             self.log_message(' Streaming iniciado (inline)')
             return
         self.streaming_popup = StreamingPopupWindow(self.core, parent=self)
         self.streaming_popup.popup_closed.connect(self._on_streaming_popup_closed)
         self.streaming_popup.show()
-        self.capture_continuous_btn.setEnabled(False)
         self.log_message(' Janela de streaming aberta')
 
     def _on_streaming_popup_closed(self):
-        self.capture_continuous_btn.setEnabled(True)
+        self.capture_continuous_btn.blockSignals(True)
+        self.capture_continuous_btn.setChecked(False)
+        self.capture_continuous_btn.blockSignals(False)
         self.streaming_popup = None
         self.log_message('⏸ Streaming fechado')
 
@@ -1849,7 +1853,7 @@ class MainWindow(QMainWindow):
                     self.history_table.setItem(row, 3, QTableWidgetItem(result_text))
                     self.history_table.setItem(row, 4, QTableWidgetItem(defect_count))
                     view_btn = QPushButton(' Ver')
-                    view_btn.setMaximumWidth(80)
+                    view_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
                     view_btn.clicked.connect(lambda checked, r=row: self._show_history_mask_image(r))
                     self.history_table.setCellWidget(row, 5, view_btn)
                 except Exception as e:
@@ -1902,7 +1906,7 @@ class MainWindow(QMainWindow):
                     dlg.setMinimumSize(900, 700)
                     layout = QVBoxLayout()
                     title = QLabel(' Visualização do Resultado')
-                    title.setStyleSheet('font-weight: bold; font-size: 14px; padding: 10px;')
+                    title.setStyleSheet('font-weight: bold; font-size: 18px; padding: 10px;')
                     layout.addWidget(title)
                     pix = QPixmap(str(image_file))
                     if pix.isNull():
@@ -1916,7 +1920,7 @@ class MainWindow(QMainWindow):
                         scroll.setWidget(img_label)
                         layout.addWidget(scroll, 1)
                     info = QLabel(f' Arquivo: {image_file.name}')
-                    info.setStyleSheet('font-size: 10px; color: #888; padding: 5px;')
+                    info.setStyleSheet('font-size: 14px; color: #888; padding: 5px;')
                     layout.addWidget(info)
                     close_btn = QPushButton('Fechar')
                     close_btn.clicked.connect(dlg.accept)

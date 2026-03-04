@@ -1,0 +1,12 @@
+{
+  "inspection_type": "segmentation",
+  "timestamp": "2026-03-03T17:12:31.433070",
+  "results": {
+    "defects": [],
+    "has_defects": false,
+    "total_defects": 0,
+    "confidence_threshold": 0.45,
+    "success": true
+  },
+  "image_file": "20260303_171231\\image.jpg"
+}
