@@ -36,6 +36,8 @@ models/*.pt
 assets/*.jpg
 assets/*.png
 !assets/placeholder.jpg  # Mantém placeholder pequeno
+*.jpg  # Ignora todos os arquivos JPG
+*.json  # Ignora todos os arquivos JSON
 
 # Configurações locais
 .env

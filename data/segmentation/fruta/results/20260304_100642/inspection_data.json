@@ -1,0 +1,35 @@
+{
+  "inspection_type": "segmentation",
+  "timestamp": "2026-03-04T10:06:42.789964",
+  "results": {
+    "defects": [
+      {
+        "bbox": [
+          718.760009765625,
+          0.9403152465820312,
+          745.448974609375,
+          84.55622863769531
+        ],
+        "confidence": 0.5749232172966003,
+        "class": 2,
+        "class_name": "oleo"
+      },
+      {
+        "bbox": [
+          1007.626953125,
+          405.56744384765625,
+          1036.104248046875,
+          446.773193359375
+        ],
+        "confidence": 0.4623469114303589,
+        "class": 2,
+        "class_name": "oleo"
+      }
+    ],
+    "has_defects": true,
+    "total_defects": 2,
+    "confidence_threshold": 0.45,
+    "success": true
+  },
+  "image_file": "20260304_100642\\image.jpg"
+}

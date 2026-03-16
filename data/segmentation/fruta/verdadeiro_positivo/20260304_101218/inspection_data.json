@@ -1,0 +1,11 @@
+{
+  "inspection_type": "Segmentação",
+  "results": {
+    "defects": [],
+    "has_defects": false,
+    "total_defects": 0,
+    "confidence_threshold": 0.7,
+    "success": true
+  },
+  "timestamp": "20260304_101218"
+}
