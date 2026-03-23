@@ -10,7 +10,7 @@ ASSETS_DIR = BASE_DIR / 'assets'
 for directory in [MODELS_DIR, LOGS_DIR, DATA_DIR, ASSETS_DIR]:
     directory.mkdir(exist_ok=True)
 CAMERA_CONFIG = {'primary': {'type': 'basler', 'ip': None, 'max_retries': 3, 'timeout': 5000}, 'fallbacks': [{'type': 'webcam', 'index': 0, 'resolution': (1280, 720)}, {'type': 'mock', 'image_path': str(ASSETS_DIR / 'fallback_image.jpg')}]}
-MODELS_CONFIG = {'segmentation': {'default_model': 'fruta', 'dir': str(MODELS_DIR / 'segmentation'), 'confidence_threshold': 0.45, 'iou_threshold': 0.8, 'image_size': 1280}, 'classification': {'default_model': 'fruta', 'dir': str(MODELS_DIR / 'classification'), 'confidence_threshold': 0.7, 'image_size': 640}}
+MODELS_CONFIG = {'detection': {'default_model': 'moes', 'dir': str(MODELS_DIR / 'detection'), 'confidence_threshold': 0.5, 'iou_threshold': 0.5, 'image_size': 640}, 'segmentation': {'default_model': 'fruta', 'dir': str(MODELS_DIR / 'segmentation'), 'confidence_threshold': 0.45, 'iou_threshold': 0.8, 'image_size': 1280}, 'classification': {'default_model': 'fruta', 'dir': str(MODELS_DIR / 'classification'), 'confidence_threshold': 0.7, 'image_size': 640}}
 
 def get_available_models(model_type: str):
     model_dir = Path(MODELS_CONFIG.get(model_type, {}).get('dir', ''))

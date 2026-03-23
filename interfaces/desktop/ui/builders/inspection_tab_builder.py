@@ -30,7 +30,7 @@ def build_inspection_tab(main_window):
 
     inspection_layout.addWidget(QLabel('Tipo:'))
     main_window.inspection_type_combo = QComboBox()
-    main_window.inspection_type_combo.addItems(['Segmentação', 'Classificação'])
+    main_window.inspection_type_combo.addItems(['Segmentação', 'Detecção', 'Classificação'])
     main_window.inspection_type_combo.currentIndexChanged.connect(main_window._on_inspection_type_changed)
     inspection_layout.addWidget(main_window.inspection_type_combo)
 
@@ -62,6 +62,7 @@ def build_inspection_tab(main_window):
     main_window.inspect_btn.setToolTip(
         'Executa análise inteligente na imagem.\n'
         'Segmentação: Detecta defeitos (bbox)\n'
+        'Detecção: Detecta objetos (bbox)\n'
         'Classificação: Classifica BOM ou RUIM'
     )
     inspection_layout.addWidget(main_window.inspect_btn)

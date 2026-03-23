@@ -18,7 +18,8 @@ from core.utils.logger import log
 from core.camera.basler_profile_manager import BaslerProfileManager
 from config import DESKTOP_CONFIG, ASSETS_DIR, get_available_models
 from .managers.capture_manager_qt import CaptureManagerQt
-from .managers import InspectionManager, HistoryManager
+from .managers import InspectionManager, HistoryManager, HybridInspectionManager
+from .ui.hybrid_inspection_widget import HybridInspectionTab
 
 class CaptureThread(QThread):
     image_captured = pyqtSignal(dict)
@@ -202,6 +203,8 @@ class InspectionThread(QThread):
         try:
             if self.inspection_type == 'segmentation':
                 result = self.core.perform_segmentation(self.image, model_name=self.model_name)
+            elif self.inspection_type == 'detection':
+                result = self.core.perform_detection(self.image, model_name=self.model_name)
             elif self.inspection_type == 'classification':
                 result = self.core.perform_classification(self.image, model_name=self.model_name)
             else:
@@ -309,18 +312,39 @@ class InspectionResultsPanel(QWidget):
             else:
                 info_text = ' NENHUM DEFEITO ENCONTRADO'
                 self.info_label.setStyleSheet('color: green; font-weight: bold; font-size: 16px; padding: 10px;')
+        elif self.inspection_type == 'detection':
+            total_objects = self.result.get('total_objects', 0)
+            has_objects = self.result.get('has_objects', False)
+            if has_objects:
+                info_text = f' {total_objects} OBJETO(S) DETECTADO(S)'
+                self.info_label.setStyleSheet('color: orange; font-weight: bold; font-size: 16px; padding: 10px;')
+            else:
+                info_text = ' NENHUM OBJETO DETECTADO'
+                self.info_label.setStyleSheet('color: green; font-weight: bold; font-size: 16px; padding: 10px;')
         elif self.inspection_type == 'classification':
             status = self.result.get('status', 'unknown')
+            predicted_class = self.result.get('predicted_class', '')
             defects_detected = self.result.get('defects_detected', False)
             if status == 'indeterminado':
                 info_text = ' INDETERMINADO'
                 self.info_label.setStyleSheet('color: orange; font-weight: bold; font-size: 16px; padding: 10px;')
+            elif predicted_class and predicted_class != 'INDETERMINADO':
+                # Mostrar a classe predita pelo modelo
+                info_text = f' Classe: {predicted_class}'
+                # Cor baseada no status se disponível
+                if defects_detected:
+                    self.info_label.setStyleSheet('color: red; font-weight: bold; font-size: 16px; padding: 10px;')
+                else:
+                    self.info_label.setStyleSheet('color: green; font-weight: bold; font-size: 16px; padding: 10px;')
             elif defects_detected:
                 info_text = ' FRUTA RUIM'
                 self.info_label.setStyleSheet('color: red; font-weight: bold; font-size: 16px; padding: 10px;')
             else:
                 info_text = ' FRUTA BOA'
                 self.info_label.setStyleSheet('color: green; font-weight: bold; font-size: 16px; padding: 10px;')
+        else:
+            info_text = ' Tipo de inspeção desconhecido'
+            self.info_label.setStyleSheet('color: red; font-weight: bold; font-size: 16px; padding: 10px;')
         self.info_label.setText(info_text)
 
     def _draw_detections(self) -> np.ndarray:
@@ -334,6 +358,24 @@ class InspectionResultsPanel(QWidget):
                     x1, y1, x2, y2 = map(int, bbox[:4])
                     confidence = defect.get('confidence', 0)
                     class_name = defect.get('class_name', 'Desconhecido')
+                    color = colors[i % len(colors)]
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                    label = f'{class_name}: {confidence:.2%}'
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.6
+                    thickness = 1
+                    text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
+                    cv2.rectangle(annotated, (x1, y1 - text_size[1] - 5), (x1 + text_size[0], y1), color, -1)
+                    cv2.putText(annotated, label, (x1, y1 - 5), font, font_scale, (255, 255, 255), thickness)
+        elif self.inspection_type == 'detection':
+            objects = self.result.get('objects', [])
+            colors = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 127, 0)]
+            for i, obj in enumerate(objects):
+                bbox = obj.get('bbox', [])
+                if len(bbox) >= 4:
+                    x1, y1, x2, y2 = map(int, bbox[:4])
+                    confidence = obj.get('confidence', 0)
+                    class_name = obj.get('class_name', 'Desconhecido')
                     color = colors[i % len(colors)]
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                     label = f'{class_name}: {confidence:.2%}'
@@ -432,6 +474,24 @@ class DetectionDialog(QDialog):
                     text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
                     cv2.rectangle(annotated, (x1, y1 - text_size[1] - 5), (x1 + text_size[0], y1), color, -1)
                     cv2.putText(annotated, label, (x1, y1 - 5), font, font_scale, (255, 255, 255), thickness)
+        elif self.inspection_type == 'detection':
+            objects = self.result.get('objects', [])
+            colors = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 127, 0)]
+            for i, obj in enumerate(objects):
+                bbox = obj.get('bbox', [])
+                if len(bbox) >= 4:
+                    x1, y1, x2, y2 = map(int, bbox[:4])
+                    confidence = obj.get('confidence', 0)
+                    class_name = obj.get('class_name', 'Desconhecido')
+                    color = colors[i % len(colors)]
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                    label = f'{class_name}: {confidence:.2%}'
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.6
+                    thickness = 1
+                    text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
+                    cv2.rectangle(annotated, (x1, y1 - text_size[1] - 5), (x1 + text_size[0], y1), color, -1)
+                    cv2.putText(annotated, label, (x1, y1 - 5), font, font_scale, (255, 255, 255), thickness)
         elif self.inspection_type == 'classification':
             h, w = annotated.shape[:2]
             status = self.result.get('status', 'unknown')
@@ -470,12 +530,30 @@ class DetectionDialog(QDialog):
             else:
                 info_text = ' NENHUM DEFEITO ENCONTRADO'
                 info_color = 'green'
+        elif self.inspection_type == 'detection':
+            total_objects = self.result.get('total_objects', 0)
+            has_objects = self.result.get('has_objects', False)
+            if has_objects:
+                info_text = f' {total_objects} OBJETO(S) DETECTADO(S)'
+                info_color = 'orange'
+            else:
+                info_text = ' NENHUM OBJETO DETECTADO'
+                info_color = 'green'
         elif self.inspection_type == 'classification':
             status = self.result.get('status', 'unknown')
+            predicted_class = self.result.get('predicted_class', '')
             defects_detected = self.result.get('defects_detected', False)
             if status == 'indeterminado':
                 info_text = ' INDETERMINADO'
                 info_color = 'orange'
+            elif predicted_class and predicted_class != 'INDETERMINADO':
+                # Mostrar a classe predita pelo modelo
+                info_text = f' Classe: {predicted_class}'
+                # Cor baseada no status se disponível
+                if defects_detected:
+                    info_color = 'red'
+                else:
+                    info_color = 'green'
             elif defects_detected:
                 info_text = ' FRUTA RUIM'
                 info_color = 'red'
@@ -610,6 +688,7 @@ class MainWindow(QMainWindow):
         self.core = core
         self.capture_mgr = CaptureManagerQt(core, camera_profiles=None)
         self.inspection_mgr = InspectionManager(core)
+        self.hybrid_inspection_mgr = HybridInspectionManager(core)
         self.history_mgr = HistoryManager(core)
         self.pfs_mgr = BaslerProfileManager()
         self.capture_mgr.manager.camera_profiles = self.pfs_mgr
@@ -690,6 +769,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.tab_widget, 1)
         self._create_capture_tab()
         self._create_inspection_tab()
+        self._create_hybrid_inspection_tab()
         self._create_results_tab()
         self._create_pfs_tab()
         self._create_settings_tab()
@@ -782,7 +862,7 @@ class MainWindow(QMainWindow):
         inspection_layout.setSpacing(5)
         inspection_layout.addWidget(QLabel('Tipo:'))
         self.inspection_type_combo = QComboBox()
-        self.inspection_type_combo.addItems(['Segmentação', 'Classificação'])
+        self.inspection_type_combo.addItems(['Segmentação', 'Detecção', 'Classificação'])
         self.inspection_type_combo.currentIndexChanged.connect(self._on_inspection_type_changed)
         inspection_layout.addWidget(self.inspection_type_combo)
         inspection_layout.addWidget(QLabel('Modelo:'))
@@ -806,7 +886,7 @@ class MainWindow(QMainWindow):
         self.inspect_btn.clicked.connect(self.perform_inspection)
         self.inspect_btn.setEnabled(True)
         self.inspect_btn.setMaximumWidth(120)
-        self.inspect_btn.setToolTip('Executa análise inteligente na imagem.\nSegmentação: Detecta defeitos (bbox)\nClassificação: Classifica BOM ou RUIM')
+        self.inspect_btn.setToolTip('Executa análise inteligente na imagem.\nSegmentação: Detecta defeitos (bbox)\nDetecção: Detecta objetos (bbox)\nClassificação: Classifica BOM ou RUIM')
         inspection_layout.addWidget(self.inspect_btn)
         inspection_layout.addStretch()
         inspection_group.setLayout(inspection_layout)
@@ -872,6 +952,18 @@ class MainWindow(QMainWindow):
         layout.addWidget(actions_group, 0)
         tab.setLayout(layout)
         self.tab_widget.addTab(tab, ' Inspeção')
+
+    def _create_hybrid_inspection_tab(self):
+        det_models = get_available_models('detection')
+        seg_models = get_available_models('segmentation')
+        clf_models = get_available_models('classification')
+        available_models = {
+            'detection': det_models,
+            'segmentation': seg_models,
+            'classification': clf_models
+        }
+        self.hybrid_inspection_tab = HybridInspectionTab(self.core, available_models, parent=self)
+        self.tab_widget.addTab(self.hybrid_inspection_tab, ' Inspeção Híbrida')
 
     def _create_results_tab(self):
         tab = QWidget()
@@ -1078,7 +1170,7 @@ class MainWindow(QMainWindow):
             if self.history_type_combo:
                 self.history_type_combo.blockSignals(True)
                 self.history_type_combo.clear()
-                self.history_type_combo.addItems(['Todos', 'Segmentação', 'Classificação'])
+                self.history_type_combo.addItems(['Todos', 'Segmentação', 'Detecção', 'Classificação'])
                 self.history_type_combo.blockSignals(False)
                 try:
                     if not self.history_type_combo.currentTextChanged.isSignalConnected():
@@ -1424,7 +1516,12 @@ class MainWindow(QMainWindow):
         if self.capture_mgr.should_inspect_after_capture():
             try:
                 inspection_type = self.capture_mgr.should_inspect_after_capture()
-                ui_text = 'Segmentação' if inspection_type == 'segmentation' else 'Classificação'
+                if inspection_type == 'segmentation':
+                    ui_text = 'Segmentação'
+                elif inspection_type == 'detection':
+                    ui_text = 'Detecção'
+                else:
+                    ui_text = 'Classificação'
                 self.capture_mgr.set_inspect_after_capture(None)
                 QTimer.singleShot(50, lambda: self._start_inspection(inspection_type, ui_text))
             except Exception as e:
@@ -1524,7 +1621,12 @@ class MainWindow(QMainWindow):
     def _on_inspection_type_changed(self):
         try:
             ui_text = self.inspection_type_combo.currentText()
-            model_type = 'classification' if 'Classificação' in ui_text else 'segmentation'
+            if 'Classificação' in ui_text:
+                model_type = 'classification'
+            elif 'Detecção' in ui_text:
+                model_type = 'detection'
+            else:
+                model_type = 'segmentation'
             available_models = get_available_models(model_type)
             self.model_combo.clear()
             if available_models:
@@ -1542,7 +1644,7 @@ class MainWindow(QMainWindow):
     def perform_inspection(self):
         ui_text = self.inspection_type_combo.currentText()
         idx = self.inspection_type_combo.currentIndex()
-        map_types = {0: 'segmentation', 1: 'classification'}
+        map_types = {0: 'segmentation', 1: 'detection', 2: 'classification'}
         inspection_type = map_types.get(idx, 'classification')
         self._inspect_after_capture = inspection_type
         self.log_message(' Capturando imagem para inspeção...')
@@ -1578,7 +1680,12 @@ class MainWindow(QMainWindow):
         if getattr(self, '_inspect_after_capture', None):
             try:
                 inspection_type = self._inspect_after_capture
-                ui_text = 'Segmentação' if inspection_type == 'segmentation' else 'Classificação'
+                if inspection_type == 'segmentation':
+                    ui_text = 'Segmentação'
+                elif inspection_type == 'detection':
+                    ui_text = 'Detecção'
+                else:
+                    ui_text = 'Classificação'
                 self._inspect_after_capture = None
                 QTimer.singleShot(50, lambda: self._start_inspection(inspection_type, ui_text))
             except Exception as e:
@@ -1628,7 +1735,7 @@ class MainWindow(QMainWindow):
             inspection_data = {'inspection_type': inspection_type, 'timestamp': datetime.now().isoformat(), 'image': self.inspection_image, 'results': self.current_results}
             self.log_message(f' Dados preparados para salvamento')
             ui_type = self.inspection_type_combo.currentText()
-            map_types = {'Segmentação': 'segmentation', 'Classificação': 'classification'}
+            map_types = {'Segmentação': 'segmentation', 'Detecção': 'detection', 'Classificação': 'classification'}
             inspection_type = map_types.get(ui_type, ui_type.lower())
             model_text = self.model_combo.currentText().strip()
             if not model_text or model_text.startswith('('):
@@ -1739,7 +1846,7 @@ class MainWindow(QMainWindow):
             return
         try:
             ui_type = self.inspection_type_combo.currentText()
-            map_types = {'Segmentação': 'segmentation', 'Classificação': 'classification'}
+            map_types = {'Segmentação': 'segmentation', 'Detecção': 'detection', 'Classificação': 'classification'}
             inspection_type = map_types.get(ui_type, ui_type.lower())
             model_text = self.model_combo.currentText().strip()
             if not model_text or model_text.startswith('('):
@@ -1770,7 +1877,7 @@ class MainWindow(QMainWindow):
         try:
             type_filter = self.history_type_combo.currentText()
             model_filter = self.history_model_combo.currentText()
-            if type_filter not in ('Todos', 'Segmentação', 'Classificação'):
+            if type_filter not in ('Todos', 'Segmentação', 'Detecção', 'Classificação'):
                 type_filter = 'Todos'
             if model_filter in ('', 'Carregando...', '-- Nenhum --'):
                 model_filter = ''
@@ -1779,9 +1886,9 @@ class MainWindow(QMainWindow):
             if not data_dir.exists():
                 self.log_message(" Pasta 'data' não encontrada")
                 return
-            type_mapping = {'Segmentação': 'segmentation', 'Classificação': 'classification'}
+            type_mapping = {'Segmentação': 'segmentation', 'Detecção': 'detection', 'Classificação': 'classification'}
             if type_filter == 'Todos':
-                types_to_search = ['segmentation', 'classification']
+                types_to_search = ['segmentation', 'detection', 'classification']
             else:
                 types_to_search = [type_mapping.get(type_filter, type_filter.lower())]
             for type_folder in data_dir.iterdir():
@@ -1941,9 +2048,9 @@ class MainWindow(QMainWindow):
             models = set()
             if not data_dir.exists():
                 return
-            type_mapping = {'Segmentação': 'segmentation', 'Classificação': 'classification'}
+            type_mapping = {'Segmentação': 'segmentation', 'Detecção': 'detection', 'Classificação': 'classification'}
             if type_filter == 'Todos':
-                types_to_search = ['segmentation', 'classification']
+                types_to_search = ['segmentation', 'detection', 'classification']
             else:
                 types_to_search = [type_mapping.get(type_filter, type_filter.lower())]
             for type_folder in data_dir.iterdir():

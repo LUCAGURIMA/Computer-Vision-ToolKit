@@ -16,6 +16,7 @@ class SystemCore:
     def __init__(self, config: Optional[Dict[str, Any]]=None):
         self.config = config or SYSTEM_CONFIG
         self.camera_manager = None
+        self.detection_model = None
         self.segmentation_model = None
         self.classification_model = None
         self._callbacks = {}
@@ -52,6 +53,9 @@ class SystemCore:
             log.error(f' Não foi possível importar ModelManager: {e}')
             log.warning('  Sistema continuará sem modelos ML')
             return
+        self.detection_model = ModelManager.get_instance('detection')
+        if not self.detection_model.load_model():
+            log.warning('  Não foi possível carregar modelo de detecção')
         self.segmentation_model = ModelManager.get_instance('segmentation')
         if not self.segmentation_model.load_model():
             log.warning('  Não foi possível carregar modelo de segmentação')
@@ -59,10 +63,15 @@ class SystemCore:
         if not self.classification_model.load_model():
             log.warning('  Não foi possível carregar modelo de classificação')
 
-    def update_model_configs(self, segmentation_threshold: float=None, classification_threshold: float=None) -> bool:
-        log.debug(f'update_model_configs chamado com seg_thresh={segmentation_threshold}, class_thresh={classification_threshold}')
+    def update_model_configs(self, detection_threshold: float=None, segmentation_threshold: float=None, classification_threshold: float=None) -> bool:
+        log.debug(f'update_model_configs chamado com det_thresh={detection_threshold}, seg_thresh={segmentation_threshold}, class_thresh={classification_threshold}')
         try:
             updated = False
+            if detection_threshold is not None and self.detection_model:
+                old_threshold = self.detection_model.config.get('confidence_threshold', 0.5)
+                self.detection_model.config['confidence_threshold'] = detection_threshold
+                log.info(f' Threshold de detecção atualizado: {old_threshold:.3f} → {detection_threshold:.3f}')
+                updated = True
             if segmentation_threshold is not None and self.segmentation_model:
                 old_threshold = self.segmentation_model.config.get('confidence_threshold', 0.5)
                 self.segmentation_model.config['confidence_threshold'] = segmentation_threshold
@@ -87,6 +96,12 @@ class SystemCore:
         try:
             log.info(' Recarregando modelos ML...')
             success_count = 0
+            if self.detection_model:
+                if self.detection_model.load_model(force_reload=force_reload):
+                    log.info(' Modelo de detecção recarregado')
+                    success_count += 1
+                else:
+                    log.warning('  Falha ao recarregar modelo de detecção')
             if self.segmentation_model:
                 if self.segmentation_model.load_model(force_reload=force_reload):
                     log.info(' Modelo de segmentação recarregado')
@@ -176,6 +191,36 @@ class SystemCore:
             self._notify('segmentation_failed', {'error': str(e)})
             return {'defects': [], 'has_defects': False, 'error': str(e), 'success': False}
 
+    def perform_detection(self, image: np.ndarray, model_name: str=None) -> Dict[str, Any]:
+        """Executa detecção de objetos na imagem"""
+        try:
+            log.info('Executando detecção de objetos...')
+            self._notify('detection_started', {})
+            if model_name:
+                self.detection_model.load_model(force_reload=True, model_name=model_name)
+            if self.detection_model is None or self.detection_model.model is None:
+                raise RuntimeError('Modelo de detecção não carregado')
+            conf = self.detection_model.config.get('confidence_threshold', 0.5)
+            iou = self.detection_model.config.get('iou_threshold', 0.5)
+            imgsz = self.detection_model.config.get('image_size', 640)
+            results = self.detection_model.model.predict(source=image, conf=conf, iou=iou, imgsz=imgsz, verbose=False)
+            objects = []
+            for result in results:
+                if result.boxes is not None:
+                    for box, conf_score, cls in zip(result.boxes.xyxy, result.boxes.conf, result.boxes.cls):
+                        obj = {'bbox': box.tolist(), 'confidence': float(conf_score), 'class': int(cls), 'class_name': self.detection_model.model.names[int(cls)] if hasattr(self.detection_model.model, 'names') else str(cls)}
+                        objects.append(obj)
+            confidence_threshold = self.detection_model.config.get('confidence_threshold', 0.5)
+            has_objects = any((o['confidence'] > confidence_threshold for o in objects))
+            result = {'objects': objects, 'has_objects': has_objects, 'total_objects': len(objects), 'confidence_threshold': confidence_threshold, 'success': True}
+            log.info(f' Detecção completa: {len(objects)} objetos encontrados')
+            self._notify('detection_completed', result)
+            return result
+        except Exception as e:
+            log.error(f' Erro na detecção: {e}')
+            self._notify('detection_failed', {'error': str(e)})
+            return {'objects': [], 'has_objects': False, 'error': str(e), 'success': False}
+
     def perform_classification(self, image: np.ndarray, model_name: str=None) -> Dict[str, Any]:
         try:
             log.info('Executando classificação...')
@@ -201,13 +246,26 @@ class SystemCore:
             confidence_threshold = self.classification_model.config.get('confidence_threshold', 0.7)
             first_defect = defects_info[0] if defects_info else {}
             if first_defect.get('confidence', 0) < confidence_threshold:
-                result = {'defects_info': [{'class': 'INDETERMINADO', 'status': 'rejected'}], 'defects_detected': None, 'confidence': first_defect.get('confidence', 0), 'confidence_threshold': confidence_threshold, 'status': 'indeterminado', 'success': True}
+                result = {
+                    'defects_info': [{'class': 'INDETERMINADO', 'confidence': first_defect.get('confidence', 0)}],
+                    'predicted_class': 'INDETERMINADO',
+                    'confidence': first_defect.get('confidence', 0),
+                    'confidence_threshold': confidence_threshold,
+                    'status': 'indeterminado',
+                    'success': True
+                }
                 log.warning(f"  Classificação indeterminada: confiança {first_defect.get('confidence'):.3f} < {confidence_threshold}")
             else:
-                defects_detected = first_defect.get('class', '').upper() == 'RUIM'
-                result = {'defects_info': defects_info, 'defects_detected': defects_detected, 'confidence': first_defect.get('confidence', 0), 'confidence_threshold': confidence_threshold, 'status': 'accepted', 'success': True}
-                status = 'RUIM' if defects_detected else 'BOM'
-                log.info(f" Classificação: {status} (confiança: {first_defect.get('confidence'):.3f})")
+                predicted_class = first_defect.get('class', 'Desconhecida')
+                result = {
+                    'defects_info': defects_info,
+                    'predicted_class': predicted_class,
+                    'confidence': first_defect.get('confidence', 0),
+                    'confidence_threshold': confidence_threshold,
+                    'status': 'accepted',
+                    'success': True
+                }
+                log.info(f" Classificação: {predicted_class} (confiança: {first_defect.get('confidence'):.3f})")
             self._notify('classification_completed', result)
             return result
         except Exception as e:

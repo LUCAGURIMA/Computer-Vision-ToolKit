@@ -16,6 +16,7 @@ from .builders import (
     build_pfs_tab,
     build_settings_tab,
 )
+from .hybrid_inspection_widget import HybridInspectionTab
 
 __all__ = [
     'BaseWidget',
@@ -25,6 +26,7 @@ __all__ = [
     'CreateProfileDialog',
     'StreamingPopupWindow',
     'InspectionResultsPanel',
+    'HybridInspectionTab',
     'build_capture_tab',
     'build_inspection_tab',
     'build_results_tab',

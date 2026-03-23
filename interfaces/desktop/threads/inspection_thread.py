@@ -50,6 +50,11 @@ class InspectionThread(QThread):
                     self.image,
                     model_name=self.model_name
                 )
+            elif self.inspection_type == 'detection':
+                result = self.core.perform_detection(
+                    self.image,
+                    model_name=self.model_name
+                )
             elif self.inspection_type == 'classification':
                 result = self.core.perform_classification(
                     self.image,
