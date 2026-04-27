@@ -774,9 +774,6 @@ class MainWindow(QMainWindow):
         self._create_pfs_tab()
         self._create_settings_tab()
         bottom_bar = QHBoxLayout()
-        self.web_server_btn = QPushButton(' Iniciar Servidor Web')
-        self.web_server_btn.clicked.connect(self.toggle_web_server)
-        bottom_bar.addWidget(self.web_server_btn)
         bottom_bar.addStretch()
         self.log_btn = QPushButton(' Mostrar Log')
         self.log_btn.clicked.connect(self.show_log_window)
@@ -1090,9 +1087,6 @@ class MainWindow(QMainWindow):
         self.auto_save_check = QCheckBox('Salvar resultados automaticamente')
         self.auto_save_check.setChecked(True)
         system_layout.addWidget(self.auto_save_check)
-        self.auto_web_check = QCheckBox('Iniciar servidor web automaticamente')
-        self.auto_web_check.setChecked(False)
-        system_layout.addWidget(self.auto_web_check)
         self.stream_popup_check = QCheckBox('Abrir streaming em janela popup')
         self.stream_popup_check.setChecked(DESKTOP_CONFIG.get('stream_in_popup', True))
         self.stream_popup_check.stateChanged.connect(self._on_stream_in_popup_toggled)
@@ -2503,9 +2497,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, 'Erro', f'Falha ao recarregar modelos:\n{str(e)}')
             self.log_message(f' Erro ao recarregar modelos: {e}')
-
-    def toggle_web_server(self):
-        QMessageBox.information(self, 'Servidor Web', 'Funcionalidade será implementada.\nO servidor web permitirá acesso via navegador.')
 
     def show_log_window(self):
         if hasattr(self, 'logs_text') and self.logs_text is not None:

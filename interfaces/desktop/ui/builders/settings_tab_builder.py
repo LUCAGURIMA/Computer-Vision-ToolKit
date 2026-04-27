@@ -176,10 +176,6 @@ def build_settings_tab(main_window):
     main_window.auto_save_check.setChecked(True)
     system_layout.addWidget(main_window.auto_save_check)
 
-    main_window.auto_web_check = QCheckBox('Iniciar servidor web automaticamente')
-    main_window.auto_web_check.setChecked(False)
-    system_layout.addWidget(main_window.auto_web_check)
-
     main_window.stream_popup_check = QCheckBox('Abrir streaming em janela popup')
     main_window.stream_popup_check.setChecked(DESKTOP_CONFIG.get('stream_in_popup', True))
     main_window.stream_popup_check.stateChanged.connect(main_window._on_stream_in_popup_toggled)

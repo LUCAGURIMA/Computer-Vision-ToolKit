@@ -25,13 +25,12 @@ def get_model_path(model_type: str, model_name: str=None) -> str:
     if model_name is None:
         model_name = config.get('default_model', 'fruta')
     return str(model_dir / f'{model_name}.pt')
-WEB_CONFIG = {'host': '0.0.0.0', 'port': 8000, 'reload': True, 'workers': 1, 'cors_origins': ['*']}
 DESKTOP_CONFIG = {'window_title': 'Sistema de Inspeção', 'window_size': (1024, 768), 'theme': 'dark', 'auto_detect_network': True, 'show_system_tray': True, 'stream_in_popup': True}
 LOGGING_CONFIG = {'level': 'INFO', 'format': '{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}', 'rotation': '10 MB', 'retention': '30 days'}
 SYSTEM_CONFIG = {'mode': 'auto', 'auto_open_browser': True, 'save_results': True, 'results_dir': str(DATA_DIR / 'results'), 'max_history': 100}
 
 def save_config():
-    config_dict = {'camera': CAMERA_CONFIG, 'models': MODELS_CONFIG, 'web': WEB_CONFIG, 'desktop': DESKTOP_CONFIG, 'system': SYSTEM_CONFIG}
+    config_dict = {'camera': CAMERA_CONFIG, 'models': MODELS_CONFIG, 'desktop': DESKTOP_CONFIG, 'system': SYSTEM_CONFIG}
     config_file = BASE_DIR / 'config.json'
     with open(config_file, 'w', encoding='utf-8') as f:
         json.dump(config_dict, f, indent=2, ensure_ascii=False)
